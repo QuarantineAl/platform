@@ -1,0 +1,55 @@
+# .sops.yaml — one age key per environment, enforced by path (decision 6).
+#
+# `quarantine init` appends exactly one creation_rule below the first time
+# each new environment is created, matching only that environment's
+# secrets.sops.yaml. Idempotent by the rule's AGE VALUE, not just path
+# presence: a rule already matching the target path is left alone if its
+# age already equals the current key, but is UPDATED IN PLACE (not
+# skipped) if it's still one of the "age1CHANGEME..." placeholders below
+# or otherwise stale — this is how the two placeholder entries this file
+# ships with get healed into real keys the first time `quarantine init`
+# runs for "dev" or "prod". Example, once an environment's rule is real:
+#
+#   creation_rules:
+#     - path_regex: ^environments/dev/secrets\.sops\.yaml$
+#       age: age1qz3q2u...devpublickey...
+#     - path_regex: ^environments/prod/secrets\.sops\.yaml$
+#       age: age1x8k9m2...prodpublickey...
+#
+# Do NOT hand-edit a rule's `age` value or path_regex once real secrets
+# exist under it — sops encrypts against whichever rule matches a file's
+# path, so changing a rule after secrets already exist re-keys committed
+# ciphertext against a recipient that may not hold the matching private
+# key. `quarantine init` itself only ever updates a rule after proving
+# (via a successful decrypt) that the key it's about to write is the one
+# that already works — see ensure_sops_rule in bin/quarantine. To rotate a
+# key deliberately, see docs/architecture.md.
+#
+# Deliberately no rule for environments/_template/: the template ships a
+# PLAINTEXT example file (environments/_template/secrets.example.yaml) that
+# is never encrypted and never deployed as-is. `quarantine init` reads it
+# ONLY as the list of required keys — restore flow decrypts the real values
+# from an existing secrets.sops.yaml + age key; generate flow fills each
+# key with a freshly generated credential — and writes the result straight
+# to the new environment's secrets.sops.yaml already SOPS-encrypted under
+# the rule above. Plaintext must never exist at a deployable path, not even
+# transiently; see the CI check in .github/workflows/ and the guard
+# patterns in .gitignore.
+#
+# manifest.yaml and compose.yaml are plain YAML on purpose (Komodo and the
+# CLI read them without decrypting anything); in practice only
+# secrets.sops.yaml is ever actually run through `sops`, even though the
+# path_regex below matches the whole environment directory.
+#
+# The two entries below are PLACEHOLDERS — every "age1CHANGEME..." value is
+# a syntactically-shaped but fake recipient. Replace each with the real
+# public half of that environment's age key (generated or restored by
+# `quarantine init`) before encrypting anything for real; nothing should
+# ever actually be encrypted against these placeholder values.
+creation_rules:
+  - path_regex: environments/dev/.*
+    age: age1CHANGEME000000000000000000000000000000000000000000dev0
+  - path_regex: environments/prod/.*
+    age: age1CHANGEME000000000000000000000000000000000000000000prod
+  - path_regex: environments/test/.*
+    age: age1felrd3qz636vzm35jcvkd2r9atgvfp0u4fv3svx976xwc2d9ddeqeallqq

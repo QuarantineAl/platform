@@ -1,0 +1,47 @@
+# infra/data/redis/compose.yaml — shared Redis-compatible cache/queue.
+#
+# No current consumer — provisioned ahead of need for first-party apps.
+# Any third-party app needing its own dedicated cache/queue instance
+# should keep it app-private inside its own apps/third-party/<app>/
+# compose.yaml rather than sharing this one; this instance is meant for
+# this org's own first-party apps only. Gated behind its own `redis`
+# profile rather than always-on like infra/data/postgres/: unlike
+# Postgres, nothing in this environment actually needs it yet, so it
+# shouldn't run idle by default. A first-party app that needs it should
+# add `redis` to the profile list `quarantine start` passes, alongside its
+# own catalog profile (see docs/adding-an-app.md).
+#
+# Image: Valkey, not Redis — the OSI-approved, BSD-licensed continuation
+# after Redis's own license change; no reason to introduce a
+# differently-licensed engine here.
+#
+# ELK stack: deliberately not added. Nothing in the current app set or
+# decisions needs it; add it under infra/observability/ or infra/data/
+# (depending on its role) when a first-party app actually requires it,
+# rather than provisioning it speculatively now.
+#
+# PIN CHECKPOINT: docker.io/valkey/valkey:9 (verified 2026-07-26).
+
+services:
+  redis:
+    image: docker.io/valkey/valkey:9
+    container_name: quarantine-redis
+    restart: unless-stopped
+    profiles: [redis]
+    networks:
+      - data
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  data:
+    name: quarantine-data
+    internal: true
+
+volumes:
+  redis-data:

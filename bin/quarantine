@@ -1,0 +1,907 @@
+#!/usr/bin/env bash
+# bin/quarantine — the CLI. See docs/architecture.md for the overall
+# design; this file implements the command surface only.
+#
+# Conventions:
+#   - QUARANTINE_HOME is where THIS script resolves to (following
+#     symlinks — install.sh symlinks this file into PATH from wherever it
+#     clones the repo). Used only by `init`, before any config exists.
+#   - Every other command loads /opt/quarantine/quarantine.yaml (override:
+#     QUARANTINE_CONFIG_FILE) via load_config, which sets QUARANTINE_REPO,
+#     QUARANTINE_ENV, DOMAIN, ACME_EMAIL for the rest of the run.
+#   - All compose invocations go through qcompose() (lib/common.sh) —
+#     never call `docker compose` directly here.
+#   - Secrets are decrypted once per command (to tmpfs, wiped on EXIT) and
+#     threaded through as a plaintext-file argument; nothing here ever
+#     writes decrypted secrets to a non-tmpfs path.
+
+set -euo pipefail
+
+_resolve_real_dir() {
+  local src="$1" dir
+  while [[ -h "$src" ]]; do
+    dir="$(cd -P "$(dirname "$src")" >/dev/null 2>&1 && pwd)"
+    src="$(readlink "$src")"
+    [[ "$src" != /* ]] && src="${dir}/${src}"
+  done
+  cd -P "$(dirname "$src")" >/dev/null 2>&1 && pwd
+}
+
+QUARANTINE_BIN_DIR="$(_resolve_real_dir "${BASH_SOURCE[0]}")"
+QUARANTINE_HOME="$(cd -P "${QUARANTINE_BIN_DIR}/.." >/dev/null 2>&1 && pwd)"
+
+# shellcheck source=../lib/common.sh
+source "${QUARANTINE_HOME}/lib/common.sh"
+
+require_bash4
+require_cmd docker yq sops age-keygen curl git flock
+docker compose version >/dev/null 2>&1 || die "docker compose (v2 plugin) is required"
+
+QUARANTINE_CONFIG_FILE="${QUARANTINE_CONFIG_FILE:-/opt/quarantine/quarantine.yaml}"
+
+# ---------------------------------------------------------------------------
+# Config
+# ---------------------------------------------------------------------------
+
+# load_config — reads QUARANTINE_CONFIG_FILE, exports QUARANTINE_REPO,
+# QUARANTINE_ENV, DOMAIN, ACME_EMAIL for every command except `init`.
+load_config() {
+  [[ -f "$QUARANTINE_CONFIG_FILE" ]] || die "no config at ${QUARANTINE_CONFIG_FILE} — run 'quarantine init' first"
+  QUARANTINE_REPO="$(yq_get "$QUARANTINE_CONFIG_FILE" '.repo')"
+  QUARANTINE_ENV="$(yq_get "$QUARANTINE_CONFIG_FILE" '.env')"
+  DOMAIN="$(yq_get "$QUARANTINE_CONFIG_FILE" '.domain')"
+  ACME_EMAIL="$(yq_get "$QUARANTINE_CONFIG_FILE" '.email')"
+  [[ -n "$QUARANTINE_REPO" && -n "$QUARANTINE_ENV" && -n "$DOMAIN" ]] \
+    || die "invalid/incomplete config at ${QUARANTINE_CONFIG_FILE}"
+  [[ -d "$QUARANTINE_REPO" ]] || die "configured repo not found: ${QUARANTINE_REPO}"
+  export QUARANTINE_REPO QUARANTINE_ENV DOMAIN ACME_EMAIL
+}
+
+# catalog_names — every app name in catalog.yaml, one per line.
+catalog_names() {
+  yq eval '.apps[].name' "${QUARANTINE_REPO}/catalog.yaml"
+}
+
+# catalog_field <name> <field> — one field of one catalog.yaml entry.
+catalog_field() {
+  local name="$1" field="$2"
+  yq eval ".apps[] | select(.name == \"${name}\") | .${field}" "${QUARANTINE_REPO}/catalog.yaml"
+}
+
+# ---------------------------------------------------------------------------
+# init
+# ---------------------------------------------------------------------------
+
+init_usage() {
+  cat <<'EOF'
+Usage: quarantine init [--domain DOMAIN] [--env NAME] [--email EMAIL] [--cf-token TOKEN] [--age-key-file PATH]
+
+One-time, interactive setup (--domain/--env/--email/--cf-token required for
+non-interactive/CI use; --age-key-file additionally required non-interactively
+when restoring an environment whose secrets.sops.yaml already exists and no
+age key is yet present on this host):
+preflight, age key restore-or-generate, environment creation from
+_template, initial secrets generate-or-restore, writes
+/opt/quarantine/quarantine.yaml, and a best-effort (non-blocking) DNS check.
+EOF
+}
+
+cmd_init() {
+  local domain="" env_name="" email="" cf_token="" age_key_file_in=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --domain) domain="${2:?--domain requires a value}"; shift 2 ;;
+      --env) env_name="${2:?--env requires a value}"; shift 2 ;;
+      --email) email="${2:?--email requires a value}"; shift 2 ;;
+      --cf-token) cf_token="${2:?--cf-token requires a value}"; shift 2 ;;
+      --age-key-file) age_key_file_in="${2:?--age-key-file requires a value}"; shift 2 ;;
+      -h|--help) init_usage; return 0 ;;
+      *) die "unknown argument to init: $1" ;;
+    esac
+  done
+
+  local repo_root="$QUARANTINE_HOME"
+  [[ -d "${repo_root}/.git" ]] || warn "no ${repo_root}/.git found — proceeding anyway, but 'quarantine upgrade' needs a git checkout"
+
+  if [[ -z "$env_name" ]]; then
+    if [[ -t 0 ]]; then
+      read -r -p "Environment name [prod]: " env_name
+      env_name="${env_name:-prod}"
+    else
+      die "--env is required when not running interactively"
+    fi
+  fi
+  [[ "$env_name" =~ ^[a-z][a-z0-9-]*$ ]] || die "invalid environment name '${env_name}': lowercase letters, digits, hyphens only, must start with a letter"
+
+  acquire_lock "$repo_root" "$env_name"
+
+  if [[ -z "$domain" ]]; then
+    if [[ -t 0 ]]; then
+      read -r -p "Domain (e.g. example.com): " domain
+    else
+      die "--domain is required when not running interactively"
+    fi
+  fi
+  [[ -n "$domain" ]] || die "domain must not be empty"
+
+  if [[ -z "$email" ]]; then
+    if [[ -t 0 ]]; then
+      read -r -p "ACME/admin email: " email
+    else
+      die "--email is required when not running interactively"
+    fi
+  fi
+  [[ -n "$email" ]] || die "email must not be empty"
+
+  local env_dir="${repo_root}/environments/${env_name}"
+  local template_dir="${repo_root}/environments/_template"
+  local secrets_file="${repo_root}/environments/${env_name}/secrets.sops.yaml"
+
+  mkdir -p "$QUARANTINE_KEYS_DIR"
+  local age_key
+  age_key="$(age_key_path "$env_name")"
+
+  if [[ -f "$age_key" ]]; then
+    log "using existing age key at ${age_key}"
+  elif [[ -n "$age_key_file_in" ]]; then
+    [[ -f "$age_key_file_in" ]] || die "--age-key-file path not found: ${age_key_file_in}"
+    # Pre-create at 0600 before writing content: a plain `cat > file` only
+    # sets the default (umask-derived) mode when CREATING the file, leaving
+    # a world-readable window on a permissive umask until a later chmod.
+    install -m 600 /dev/null "$age_key"
+    cat "$age_key_file_in" > "$age_key"
+    log "restored age key for '${env_name}' from ${age_key_file_in}"
+  else
+    local choice="g"
+    if [[ -t 0 ]]; then
+      read -r -p "No age key found for '${env_name}'. [g]enerate new or [r]estore from backup? [g]: " choice
+      choice="${choice:-g}"
+    fi
+    case "$choice" in
+      r|R)
+        log "paste the age private key, then press Ctrl-D:"
+        install -m 600 /dev/null "$age_key"
+        cat > "$age_key"
+        ;;
+      *)
+        log "generating a new age key for '${env_name}'"
+        age-keygen -o "$age_key" 2>/dev/null
+        chmod 600 "$age_key"
+        ;;
+    esac
+  fi
+
+  local age_public
+  age_public="$(age-keygen -y "$age_key")"
+
+  if [[ ! -d "$env_dir" ]]; then
+    log "creating environment '${env_name}' from _template"
+    mkdir -p "$env_dir"
+    cp "${template_dir}/compose.yaml" "${env_dir}/compose.yaml"
+    cp "${template_dir}/manifest.yaml" "${env_dir}/manifest.yaml"
+  else
+    log "environment '${env_name}' already exists at ${env_dir}"
+  fi
+
+  if [[ -f "$secrets_file" ]]; then
+    log "secrets.sops.yaml already exists for '${env_name}' — verifying it decrypts"
+    local verify_tmp
+    verify_tmp="$(secrets_decrypt_to_tmpfs "$repo_root" "$env_name")"
+    trap_add "shred_file '${verify_tmp}'"
+    verify_secrets_complete "$verify_tmp"
+    shred_file "$verify_tmp"
+    log "secrets verified OK (restore flow)"
+    # Only now, having proven this age key actually decrypts the existing
+    # ciphertext, sync .sops.yaml's recipient for this path — never before
+    # verification, since writing it first would let a wrong/stale key
+    # permanently overwrite a working recipient with no rollback.
+    ensure_sops_rule "$repo_root" "$env_name" "$age_public"
+  else
+    # No secrets exist yet: the rule must be in place before generate_secrets
+    # can encrypt anything, since sops resolves the recipient purely from
+    # .sops.yaml, not from SOPS_AGE_KEY_FILE.
+    ensure_sops_rule "$repo_root" "$env_name" "$age_public"
+    generate_secrets "$repo_root" "$env_name" "$cf_token"
+    log "remember to git add/commit/push environments/${env_name}/secrets.sops.yaml (and .sops.yaml if this is the first environment of its name) for GitOps sync"
+  fi
+
+  mkdir -p "$(dirname "$QUARANTINE_CONFIG_FILE")"
+  cat > "$QUARANTINE_CONFIG_FILE" <<EOF
+repo: ${repo_root}
+env: ${env_name}
+domain: ${domain}
+email: ${email}
+EOF
+  chmod 600 "$QUARANTINE_CONFIG_FILE"
+  log "wrote ${QUARANTINE_CONFIG_FILE}"
+
+  local public_ip
+  public_ip="$(resolve_public_ip)"
+  if [[ -n "$public_ip" ]]; then
+    check_dns "${domain}" "$public_ip" || true
+    check_dns "auth.${domain}" "$public_ip" || true
+  else
+    warn "could not determine this host's public IP — skipping DNS check"
+  fi
+
+  log "init complete for environment '${env_name}'. Next: quarantine start"
+}
+
+# ensure_sops_rule <repo_root> <env> <age_public_key>
+# Idempotent by AGE VALUE, not just path presence: the repo ships
+# placeholder creation_rules for environments/dev/.* and environments/prod/.*
+# (age1CHANGEME...) so a fresh clone's .sops.yaml already has a rule
+# matching those two path_regexes — checking presence alone would treat
+# that placeholder as "already configured" and never write the real,
+# just-generated key. Comparing the actual age value catches that case (and
+# a stale key left over from a prior key rotation) and updates the rule in
+# place instead of silently skipping it.
+ensure_sops_rule() {
+  local repo_root="$1" env="$2" age_public="$3"
+  local sops_file="${repo_root}/.sops.yaml"
+  local path_regex="environments/${env}/.*"
+  local existing_age
+
+  [[ -f "$sops_file" ]] || die ".sops.yaml not found at ${sops_file}"
+
+  existing_age="$(yq eval ".creation_rules[] | select(.path_regex == \"${path_regex}\") | .age" "$sops_file")"
+
+  if [[ "$existing_age" == "$age_public" ]]; then
+    log ".sops.yaml already has the correct rule for '${env}'"
+    return 0
+  fi
+
+  if [[ -z "$existing_age" ]]; then
+    yq eval -i ".creation_rules += [{\"path_regex\": \"${path_regex}\", \"age\": \"${age_public}\"}]" "$sops_file"
+    log "added .sops.yaml rule for '${env}'"
+  else
+    yq eval -i "(.creation_rules[] | select(.path_regex == \"${path_regex}\") | .age) = \"${age_public}\"" "$sops_file"
+    log "updated .sops.yaml rule for '${env}' to the current age key (previous value was stale or a placeholder)"
+  fi
+}
+
+# Keys that generate_secrets always fills with a real (non-empty,
+# non-placeholder) value — everything in secrets.example.yaml EXCEPT the
+# OIDC client id/secret keys, which are legitimately empty until
+# provisioners/zitadel.sh (Phase 3) runs. Shared by generate_secrets (which
+# sets them) and verify_secrets_complete (which checks a restored file
+# actually has them).
+REQUIRED_SECRET_KEYS=(
+  '.core.postgres.admin_password'
+  '.core.zitadel.masterkey'
+  '.core.zitadel.admin_password'
+  '.core.zitadel.db_password'
+  '.core.komodo.database_password'
+  '.core.komodo.admin_password'
+  '.core.komodo.jwt_secret'
+  '.core.komodo.webhook_secret'
+  '.core.traefik.cloudflare_api_token'
+  '.core.oauth2_proxy.cookie_secret'
+)
+
+# verify_secrets_complete <plaintext_file>
+# Dies if any REQUIRED_SECRET_KEYS entry is missing, empty, or still a
+# template "CHANGEME..." placeholder. Used by cmd_init's restore-flow
+# verification, which otherwise only proves the file DECRYPTS — not that
+# it's actually complete under the current schema (a backup taken before a
+# key was added, or hand-encrypted straight from secrets.example.yaml
+# without filling it in, would otherwise pass silently and fail piecemeal,
+# confusingly, much later during `quarantine start`).
+verify_secrets_complete() {
+  local plaintext="$1" key val
+  local -a bad=()
+  for key in "${REQUIRED_SECRET_KEYS[@]}"; do
+    val="$(secrets_get "$plaintext" "$key")"
+    [[ -z "$val" || "$val" == CHANGEME* ]] && bad+=("$key")
+  done
+  if (( ${#bad[@]} > 0 )); then
+    die "secrets.sops.yaml is missing or has placeholder values for: ${bad[*]} — this backup may predate the current schema (see environments/_template/secrets.example.yaml)"
+  fi
+}
+
+# generate_secrets <repo_root> <env> <cf_token>
+# Builds a fresh secrets.sops.yaml from environments/_template/secrets.example.yaml:
+# every key is explicitly classified as generated, operator-supplied, or
+# deferred to a later step — see the comment block below for the full
+# list, kept in lockstep with secrets.example.yaml's structure. Plaintext
+# only ever exists in a 0600 tmpfs tempfile, shredded on EXIT.
+generate_secrets() {
+  local repo_root="$1" env="$2" cf_token="$3"
+  local template="${repo_root}/environments/_template/secrets.example.yaml"
+  local secrets_file="${repo_root}/environments/${env}/secrets.sops.yaml"
+  local age_key
+  age_key="$(age_key_path "$env")"
+
+  [[ -f "$template" ]] || die "secrets template not found: $template"
+
+  if [[ -z "$cf_token" ]]; then
+    if [[ -t 0 ]]; then
+      read -r -s -p "Cloudflare API token (Zone / DNS / Edit, scoped to this domain): " cf_token
+      echo >&2
+    else
+      die "--cf-token is required when not running interactively (no existing secrets to restore)"
+    fi
+  fi
+  [[ -n "$cf_token" ]] || die "Cloudflare API token must not be empty"
+
+  local tmp_dir="/dev/shm"
+  [[ -d "$tmp_dir" && -w "$tmp_dir" ]] || tmp_dir="${TMPDIR:-/tmp}"
+  local tmp
+  tmp="$(mktemp "${tmp_dir%/}/quarantine-secrets-gen.XXXXXX")"
+  chmod 600 "$tmp"
+  trap_add "shred_file '${tmp}'"
+
+  cp "$template" "$tmp"
+
+  # --- generated (random, 32 chars, plain alphanumeric) -------------------
+  # Driven off REQUIRED_SECRET_KEYS (minus the two keys special-cased
+  # below) rather than its own separately-maintained list, so this can
+  # never drift out of sync with verify_secrets_complete's notion of
+  # what's required (see that function's comment for why that drift is a
+  # real, previously-hit failure mode).
+  local key generated
+  for key in "${REQUIRED_SECRET_KEYS[@]}"; do
+    case "$key" in
+      '.core.zitadel.admin_password'|'.core.traefik.cloudflare_api_token') continue ;;
+    esac
+    generated="$(gen_password 32)"
+    [[ -n "$generated" ]] || die "gen_password produced an empty value for ${key} (is /dev/urandom available?)"
+    yq eval -i "${key} = \"${generated}\"" "$tmp"
+  done
+
+  # --- generated, complexity-required (Zitadel's own password policy
+  # rejects a plain-alphanumeric first-instance admin password for
+  # lacking a symbol) --------------------------------------------------
+  generated="$(gen_password_complex 32)"
+  [[ -n "$generated" ]] || die "gen_password_complex produced an empty value for .core.zitadel.admin_password"
+  yq eval -i ".core.zitadel.admin_password = \"${generated}\"" "$tmp"
+
+  # --- operator-supplied --------------------------------------------------
+  # strenv(), not string interpolation into the expression: cf_token is
+  # arbitrary operator input (unlike the generated values above), and a
+  # literal `"` in it would otherwise break out of the intended yq string
+  # literal. strenv() injects an environment variable's value as a string
+  # without needing any expression-syntax escaping at all.
+  QUARANTINE_CF_TOKEN_VALUE="$cf_token" yq eval -i \
+    '.core.traefik.cloudflare_api_token = strenv(QUARANTINE_CF_TOKEN_VALUE)' "$tmp"
+
+  # --- deferred: filled in once Zitadel is up and provisioners run --------
+  for key in \
+    '.core.zitadel.provisioner_pat' \
+    '.apps["uptime-kuma"].oidc_client_id' \
+    '.apps["uptime-kuma"].oidc_client_secret'
+  do
+    yq eval -i "${key} = \"\"" "$tmp"
+  done
+
+  # --filename-override tells sops which path to match .sops.yaml's
+  # creation_rules against — sops otherwise matches against the path of
+  # the file it's actually reading, which is this tmpfs tempfile, not the
+  # real destination, and would fail to find a matching rule at all.
+  #
+  # Encrypt to a tempfile IN THE SAME DIRECTORY as secrets_file, then
+  # atomically rename it into place — never redirect `sops --encrypt`
+  # straight into secrets_file. A bare `>` redirect truncates/creates the
+  # destination before sops produces any output, so an interruption
+  # (SIGINT/SIGKILL/disk-full) mid-encrypt leaves a truncated file at the
+  # real path; cmd_init would then see it "exists" on the next run and take
+  # the restore-verify branch instead of ever regenerating, failing with a
+  # misleading "check age key" error instead of the real cause. Same-
+  # directory tempfile + mv guarantees the rename is atomic (same
+  # filesystem), so the destination is either the old state or the fully
+  # new one — never a partial write.
+  local encrypted_tmp
+  encrypted_tmp="$(mktemp "${secrets_file}.XXXXXX")"
+  if ! SOPS_AGE_KEY_FILE="$age_key" sops --encrypt \
+    --input-type yaml --output-type yaml \
+    --filename-override "$secrets_file" \
+    "$tmp" > "$encrypted_tmp"; then
+    rm -f "$encrypted_tmp"
+    die "sops encryption failed for '${env}' — no partial file was left at ${secrets_file}"
+  fi
+  chmod 600 "$encrypted_tmp"
+  mv "$encrypted_tmp" "$secrets_file"
+  log "generated and encrypted secrets for '${env}'"
+}
+
+# ---------------------------------------------------------------------------
+# start
+# ---------------------------------------------------------------------------
+
+cmd_start() {
+  load_config
+  local repo_root="$QUARANTINE_REPO" env="$QUARANTINE_ENV"
+  local env_dir="${repo_root}/environments/${env}"
+  local manifest="${env_dir}/manifest.yaml"
+
+  [[ -d "$env_dir" ]] || die "environment '${env}' not found at ${env_dir} — run 'quarantine init' first"
+  [[ -f "$manifest" ]] || die "no manifest.yaml for environment '${env}': ${manifest}"
+
+  acquire_lock "$repo_root" "$env"
+
+  ensure_edge_network
+
+  local plaintext
+  plaintext="$(secrets_decrypt_to_tmpfs "$repo_root" "$env")"
+  trap_add "shred_file '${plaintext}'"
+
+  generate_env_file "$repo_root" "$env" "$plaintext" "$manifest"
+
+  log "starting traefik"
+  qcompose "$env" up -d traefik
+  wait_healthy "quarantine-traefik"
+
+  log "starting postgres"
+  qcompose "$env" up -d postgres
+  wait_healthy "quarantine-postgres"
+
+  "${repo_root}/provisioners/postgres.sh" "$repo_root" "$env" "$plaintext" zitadel
+
+  log "starting zitadel"
+  qcompose "$env" up -d zitadel-api zitadel-login
+  wait_healthy "quarantine-zitadel-api"
+  wait_healthy "quarantine-zitadel-login"
+
+  log "starting observability"
+  qcompose "$env" --profile observability up -d
+
+  local gitops_enabled
+  gitops_enabled="$(yq_get "$manifest" '.gitops')"
+  if [[ "$gitops_enabled" == "true" ]]; then
+    log "GitOps mode enabled for '${env}' — starting Komodo"
+    qcompose "$env" --profile gitops up -d
+  fi
+
+  reconcile_apps "$repo_root" "$env" "$manifest" "$plaintext"
+
+  log "quarantine start complete for environment '${env}'"
+}
+
+ensure_edge_network() {
+  if docker network inspect edge >/dev/null 2>&1; then
+    log "edge network already exists"
+  else
+    log "creating edge network"
+    docker network create edge >/dev/null
+  fi
+}
+
+# req_secret <plaintext_file> <key> <description> — reads a value that must
+# not be empty and not a leftover template placeholder, dying with a clear
+# error otherwise. Top-level (not nested inside generate_env_file): bash has
+# no true nested-function scope, so a function "defined inside" another one
+# is still registered globally the first time the outer function runs, and
+# remains callable afterward — nesting it also made it read `$plaintext` as
+# an implicit closure over the caller's local instead of an explicit
+# parameter, which would abort the ENTIRE process under `set -u` ("plaintext:
+# unbound variable") if anything else ever called a same-named function
+# outside that scope. Taking plaintext explicitly removes both risks.
+#
+# CRITICAL: every call site captures the result via its OWN standalone
+# assignment (`local v; v="$(req_secret ...)"`) rather than embedding the
+# call directly as another command's argument (`printf '%s' "$(req_secret
+# ...)"`). Under `set -e`, only the exit status of the OUTER command is
+# checked when a command substitution is used to build one of its
+# arguments — so embedding it would silently swallow req_secret's `die` and
+# print an empty value instead of aborting the script. (This is exactly the
+# bug that made postgres start with a blank password during Phase 2
+# testing — see git history.)
+req_secret() {
+  local plaintext="$1" key="$2" description="$3" val
+  val="$(secrets_get "$plaintext" "$key")"
+  [[ -n "$val" && "$val" != CHANGEME* ]] \
+    || die "secret '${key}' (${description}) is empty or still a template placeholder — secrets.sops.yaml may be incomplete; check via 'sops ${plaintext}'"
+  printf '%s' "$val"
+}
+
+# generate_env_file <repo_root> <env> <plaintext_secrets_file> <manifest>
+# Writes environments/<env>/.env from decrypted secrets + manifest versions
+# + host config (DOMAIN/ACME_EMAIL). Regenerated on every `start`; must be
+# byte-for-byte deterministic given unchanged secrets/manifest, since
+# `quarantine start` run twice must produce no compose-level changes.
+generate_env_file() {
+  local repo_root="$1" env="$2" plaintext="$3" manifest="$4"
+  local env_file="${repo_root}/environments/${env}/.env"
+  local tmp
+  # Co-located with env_file (not a bare `mktemp`, which defaults to
+  # $TMPDIR): the final `mv` below is only an atomic rename(2) if both
+  # paths share a filesystem, which is only guaranteed if the tempfile
+  # lives in the same directory as its destination.
+  tmp="$(mktemp "${repo_root}/environments/${env}/.env.XXXXXX")"
+  chmod 600 "$tmp"
+  # This tempfile holds the same plaintext secrets as the final .env — wipe
+  # it (not just rm) if generate_env_file dies partway through (e.g. a
+  # req_secret failure) instead of leaving plaintext behind.
+  trap_add "shred_file '${tmp}'"
+
+  local cf_token pg_admin_password
+  local zitadel_masterkey zitadel_admin_password zitadel_db_password
+  local komodo_db_password komodo_admin_password komodo_jwt_secret komodo_webhook_secret
+  local oauth2_cookie_secret uptime_kuma_oidc_id uptime_kuma_oidc_secret
+
+  cf_token="$(req_secret "$plaintext" '.core.traefik.cloudflare_api_token' 'Cloudflare API token')"
+  pg_admin_password="$(req_secret "$plaintext" '.core.postgres.admin_password' 'Postgres admin password')"
+  zitadel_masterkey="$(req_secret "$plaintext" '.core.zitadel.masterkey' 'Zitadel masterkey')"
+  zitadel_admin_password="$(req_secret "$plaintext" '.core.zitadel.admin_password' 'Zitadel admin password')"
+  zitadel_db_password="$(req_secret "$plaintext" '.core.zitadel.db_password' "Zitadel's own Postgres role password")"
+  komodo_db_password="$(req_secret "$plaintext" '.core.komodo.database_password' 'Komodo Mongo password')"
+  komodo_admin_password="$(req_secret "$plaintext" '.core.komodo.admin_password' 'Komodo admin password')"
+  komodo_jwt_secret="$(req_secret "$plaintext" '.core.komodo.jwt_secret' 'Komodo JWT secret')"
+  komodo_webhook_secret="$(req_secret "$plaintext" '.core.komodo.webhook_secret' 'Komodo webhook secret')"
+  oauth2_cookie_secret="$(req_secret "$plaintext" '.core.oauth2_proxy.cookie_secret' 'oauth2-proxy cookie secret')"
+
+  # OIDC client id/secret are legitimately empty until provisioners/zitadel.sh
+  # runs — read directly, not via req_secret.
+  uptime_kuma_oidc_id="$(secrets_get "$plaintext" '.apps["uptime-kuma"].oidc_client_id')"
+  uptime_kuma_oidc_secret="$(secrets_get "$plaintext" '.apps["uptime-kuma"].oidc_client_secret')"
+
+  {
+    printf 'DOMAIN=%s\n' "$DOMAIN"
+    printf 'ACME_EMAIL=%s\n' "$ACME_EMAIL"
+    printf 'CF_DNS_API_TOKEN=%s\n' "$cf_token"
+
+    printf 'POSTGRES_ADMIN_PASSWORD=%s\n' "$pg_admin_password"
+
+    printf 'ZITADEL_MASTERKEY=%s\n' "$zitadel_masterkey"
+    printf 'ZITADEL_ADMIN_PASSWORD=%s\n' "$zitadel_admin_password"
+    # URL-encoded: the automated generate flow only ever produces plain
+    # alphanumeric passwords, but a restore-flow secrets file (or a manual
+    # secrets_edit) could hold one with a DSN delimiter character (@, :, /,
+    # #) that would otherwise be misparsed as part of the URI structure.
+    printf 'ZITADEL_DATABASE_POSTGRES_DSN=postgresql://zitadel:%s@postgres:5432/zitadel?sslmode=disable\n' "$(urlencode "$zitadel_db_password")"
+
+    printf 'KOMODO_DATABASE_USERNAME=komodo\n'
+    printf 'KOMODO_DATABASE_PASSWORD=%s\n' "$komodo_db_password"
+    printf 'KOMODO_ADMIN_PASSWORD=%s\n' "$komodo_admin_password"
+    printf 'KOMODO_JWT_SECRET=%s\n' "$komodo_jwt_secret"
+    printf 'KOMODO_WEBHOOK_SECRET=%s\n' "$komodo_webhook_secret"
+
+    printf 'OAUTH2_PROXY_COOKIE_SECRET=%s\n' "$oauth2_cookie_secret"
+
+    printf 'OIDC_CLIENT_ID_UPTIME_KUMA=%s\n' "$uptime_kuma_oidc_id"
+    printf 'OIDC_CLIENT_SECRET_UPTIME_KUMA=%s\n' "$uptime_kuma_oidc_secret"
+  } > "$tmp"
+
+  # Version vars are computed from the manifest's OWN app list (not a
+  # hardcoded name list) and explicitly unset before manifest_export_versions
+  # runs, so a stale/ambient shell-exported var of the same generic name
+  # (e.g. a CI job that happens to already export IMMICH_VERSION for an
+  # unrelated reason) can never leak into the generated .env — only a
+  # version manifest_export_versions itself exports THIS run survives the
+  # `${!var:-}` check below. This also means any future catalog app gets
+  # its pinned version persisted automatically, with no hardcoded list to
+  # keep in sync.
+  local -a manifest_app_names=()
+  local manifest_app_count app_i app_nm
+  manifest_app_count="$(yq eval '.apps | length' "$manifest")"
+  for (( app_i = 0; app_i < manifest_app_count; app_i++ )); do
+    app_nm="$(yq eval ".apps[$app_i].name" "$manifest")"
+    [[ -z "$app_nm" || "$app_nm" == "null" ]] && continue
+    manifest_app_names+=("$app_nm")
+  done
+
+  local -a version_vars=()
+  local nm vn var
+  for nm in "${manifest_app_names[@]}"; do
+    vn="$(printf '%s' "$nm" | tr '[:lower:]-' '[:upper:]_')_VERSION"
+    version_vars+=("$vn")
+    unset "$vn"
+  done
+
+  manifest_export_versions "$manifest"
+
+  for var in "${version_vars[@]}"; do
+    if [[ -n "${!var:-}" ]]; then
+      printf '%s=%s\n' "$var" "${!var}" >> "$tmp"
+    fi
+  done
+
+  mv "$tmp" "$env_file"
+  chmod 600 "$env_file"
+  log "generated ${env_file}"
+}
+
+# profile_services <env> <profile> — service names belonging EXCLUSIVELY
+# to <profile>, one per line: the set difference between "config
+# --services" with that profile active and with no profile at all (the
+# unprofiled baseline). See reconcile_apps for why this matters.
+profile_services() {
+  local env="$1" profile="$2"
+  comm -13 \
+    <(qcompose "$env" config --services 2>/dev/null | sort -u) \
+    <(qcompose "$env" --profile "$profile" config --services 2>/dev/null | sort -u)
+}
+
+# reconcile_apps <repo_root> <env> <manifest> <plaintext_secrets_file>
+# Provisions (db/oidc) and starts every app in the manifest, then stops
+# any catalog app that's running but no longer in the manifest — the
+# "app not in manifest is never started" contract also means "gets
+# stopped if it was started."
+reconcile_apps() {
+  local repo_root="$1" env="$2" manifest="$3" plaintext="$4"
+  local count i app_name needs_db needs_oidc p
+  local -a active_profiles=()
+
+  count="$(yq eval '.apps | length' "$manifest")"
+  for (( i = 0; i < count; i++ )); do
+    app_name="$(yq eval ".apps[$i].name" "$manifest")"
+    [[ -z "$app_name" || "$app_name" == "null" ]] && continue
+
+    needs_db="$(catalog_field "$app_name" needs_db)"
+    needs_oidc="$(catalog_field "$app_name" needs_oidc)"
+
+    if [[ "$needs_db" == "true" ]]; then
+      "${repo_root}/provisioners/postgres.sh" "$repo_root" "$env" "$plaintext" "$app_name"
+    fi
+
+    if [[ "$needs_oidc" == "true" ]]; then
+      if [[ -x "${repo_root}/provisioners/zitadel.sh" ]]; then
+        "${repo_root}/provisioners/zitadel.sh" "$repo_root" "$env" "$plaintext" "$app_name"
+      else
+        warn "provisioners/zitadel.sh not built yet — skipping OIDC provisioning for '${app_name}' (Phase 3)"
+      fi
+    fi
+
+    active_profiles+=("$app_name")
+  done
+
+  if (( ${#active_profiles[@]} > 0 )); then
+    # The provisioners above may have just persisted brand-new secrets (an
+    # app's first-ever OIDC client secret, a first-ever DB password) into
+    # secrets.sops.yaml — but the .env file cmd_start generated was written
+    # from a decrypt snapshot taken BEFORE any of that happened, so it still
+    # has those fields empty. Re-decrypt and regenerate now so these
+    # containers start with real values on their very first `start`, not
+    # empty ones that only get healed by a second, separate run.
+    local fresh_plaintext
+    fresh_plaintext="$(secrets_decrypt_to_tmpfs "$repo_root" "$env")"
+    trap_add "shred_file '${fresh_plaintext}'"
+    generate_env_file "$repo_root" "$env" "$fresh_plaintext" "$manifest"
+    shred_file "$fresh_plaintext"
+
+    local -a profile_args=()
+    for p in "${active_profiles[@]}"; do
+      profile_args+=(--profile "$p")
+    done
+    log "starting apps: ${active_profiles[*]}"
+    qcompose "$env" "${profile_args[@]}" up -d
+  fi
+
+  # Captured via a direct command substitution (checked with `||` right
+  # here), NOT `while ... done < <(catalog_names)`: a while loop's own exit
+  # status never reflects a process substitution's exit status, so if
+  # catalog.yaml is malformed (bad manual edit, unresolved merge conflict
+  # markers) that pattern would silently see zero lines and reconcile as if
+  # the catalog were empty — never stopping a removed app, no warning at
+  # all. Checking the command substitution's own exit status directly
+  # catches that instead of masking it.
+  local catalog_list
+  catalog_list="$(catalog_names)" || die "failed to read catalog.yaml — check for syntax errors"
+
+  local catalog_name in_manifest
+  while IFS= read -r catalog_name; do
+    [[ -z "$catalog_name" ]] && continue
+    in_manifest=false
+    for p in "${active_profiles[@]}"; do
+      [[ "$p" == "$catalog_name" ]] && in_manifest=true && break
+    done
+    [[ "$in_manifest" == true ]] && continue
+
+    local -a svc_list=()
+    local svc
+    while IFS= read -r svc; do
+      [[ -n "$svc" ]] && svc_list+=("$svc")
+    done < <(profile_services "$env" "$catalog_name")
+
+    if (( ${#svc_list[@]} > 0 )); then
+      log "stopping '${catalog_name}' (no longer in manifest): ${svc_list[*]}"
+      # Explicit service names, not just --profile: `docker compose
+      # --profile X stop` with NO service arguments resolves its scope as
+      # "every unprofiled always-on service PLUS profile X's services" —
+      # not "only profile X" — so it would also stop traefik, postgres,
+      # and zitadel if they happen to be running. Naming the exact
+      # services (computed via profile_services, a set difference
+      # against the unprofiled baseline) avoids that entirely. Stopping a
+      # service that was never created is a harmless no-op (verified).
+      qcompose "$env" --profile "$catalog_name" stop "${svc_list[@]}"
+    fi
+  done <<< "$catalog_list"
+}
+
+# ---------------------------------------------------------------------------
+# app add / app remove
+# ---------------------------------------------------------------------------
+
+cmd_app_add() {
+  load_config
+  acquire_lock "$QUARANTINE_REPO" "$QUARANTINE_ENV"
+  [[ $# -ge 1 ]] || die "usage: quarantine app add <name> [--version v]"
+  local app_name="$1"; shift
+  local version=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --version) version="${2:?--version requires a value}"; shift 2 ;;
+      *) die "unknown argument: $1" ;;
+    esac
+  done
+
+  # Same charset scripts/new-app.sh itself requires of a new catalog entry:
+  # unlike env_name in cmd_init, this was previously interpolated straight
+  # into yq expressions (and, once in the manifest, into a SQL identifier in
+  # provisioners/postgres.sh) with no validation at all — a name containing
+  # a `"` could break out of the intended `select(.name == "...")` filter
+  # or SQL context.
+  [[ "$app_name" =~ ^[a-z][a-z0-9-]*$ ]] || die "invalid app name '${app_name}': lowercase letters, digits, hyphens only, must start with a letter"
+  [[ -z "$version" || "$version" =~ ^[A-Za-z0-9._-]+$ ]] || die "invalid --version '${version}': only letters, digits, dots, underscores, hyphens allowed"
+
+  local manifest="${QUARANTINE_REPO}/environments/${QUARANTINE_ENV}/manifest.yaml"
+  local exists
+  exists="$(yq eval "[.apps[] | select(.name == \"${app_name}\")] | length" "${QUARANTINE_REPO}/catalog.yaml")"
+  [[ "$exists" != "0" ]] || die "'${app_name}' is not in catalog.yaml — see docs/adding-an-app.md"
+
+  local already
+  already="$(yq eval "[.apps[] | select(.name == \"${app_name}\")] | length" "$manifest")"
+  if [[ "$already" != "0" ]]; then
+    if [[ -n "$version" ]]; then
+      yq eval -i "(.apps[] | select(.name == \"${app_name}\") | .version) = \"${version}\"" "$manifest"
+      log "'${app_name}' already in manifest — updated version to ${version}"
+    else
+      log "'${app_name}' already in manifest — no change"
+    fi
+    return 0
+  fi
+
+  if [[ -n "$version" ]]; then
+    yq eval -i ".apps += [{\"name\": \"${app_name}\", \"version\": \"${version}\"}]" "$manifest"
+  else
+    yq eval -i ".apps += [{\"name\": \"${app_name}\"}]" "$manifest"
+  fi
+
+  log "added '${app_name}' to environments/${QUARANTINE_ENV}/manifest.yaml — run 'quarantine start' to apply"
+  log "remember to git add/commit/push environments/${QUARANTINE_ENV}/manifest.yaml for GitOps sync"
+}
+
+cmd_app_remove() {
+  load_config
+  acquire_lock "$QUARANTINE_REPO" "$QUARANTINE_ENV"
+  [[ $# -ge 1 ]] || die "usage: quarantine app remove <name>"
+  local app_name="$1"
+  local manifest="${QUARANTINE_REPO}/environments/${QUARANTINE_ENV}/manifest.yaml"
+
+  [[ "$app_name" =~ ^[a-z][a-z0-9-]*$ ]] || die "invalid app name '${app_name}': lowercase letters, digits, hyphens only, must start with a letter"
+
+  local already
+  already="$(yq eval "[.apps[] | select(.name == \"${app_name}\")] | length" "$manifest")"
+  if [[ "$already" == "0" ]]; then
+    log "'${app_name}' is not in the manifest — nothing to do"
+    return 0
+  fi
+
+  yq eval -i "del(.apps[] | select(.name == \"${app_name}\"))" "$manifest"
+  log "removed '${app_name}' from environments/${QUARANTINE_ENV}/manifest.yaml — run 'quarantine start' to stop it"
+  log "remember to git add/commit/push environments/${QUARANTINE_ENV}/manifest.yaml for GitOps sync"
+}
+
+# ---------------------------------------------------------------------------
+# status
+# ---------------------------------------------------------------------------
+
+cmd_status() {
+  load_config
+  log "environment: ${QUARANTINE_ENV}  domain: ${DOMAIN}"
+
+  local catalog_list
+  catalog_list="$(catalog_names)" || die "failed to read catalog.yaml — check for syntax errors"
+
+  local -a all_profiles=(--profile observability --profile gitops)
+  local name
+  while IFS= read -r name; do
+    [[ -z "$name" ]] && continue
+    all_profiles+=(--profile "$name")
+  done <<< "$catalog_list"
+
+  qcompose "$QUARANTINE_ENV" "${all_profiles[@]}" ps
+}
+
+# ---------------------------------------------------------------------------
+# upgrade
+# ---------------------------------------------------------------------------
+
+cmd_upgrade() {
+  load_config
+
+  # QUARANTINE_REPO (from quarantine.yaml, hand-editable) and
+  # QUARANTINE_HOME (resolved from this script's own on-disk location) are
+  # only guaranteed to be the same checkout because cmd_init happens to
+  # write QUARANTINE_HOME as `repo:` at setup time. If they've since
+  # diverged (a hand-edited quarantine.yaml, a relocated checkout), `git
+  # pull` below would update QUARANTINE_REPO while `exec "$0" start`
+  # re-executes the CLI code found at the unrelated, un-pulled
+  # QUARANTINE_HOME — silently not updating the CLI's own behavior at all.
+  local resolved_repo resolved_home
+  resolved_repo="$(cd -P "$QUARANTINE_REPO" >/dev/null 2>&1 && pwd)"
+  resolved_home="$(cd -P "$QUARANTINE_HOME" >/dev/null 2>&1 && pwd)"
+  [[ "$resolved_repo" == "$resolved_home" ]] \
+    || die "configured repo (${QUARANTINE_REPO}) is not the same checkout as this CLI's own location (${QUARANTINE_HOME}) — 'quarantine upgrade' would pull code it then never actually runs; fix quarantine.yaml's 'repo:' field or reinstall"
+
+  log "pulling latest changes in ${QUARANTINE_REPO}"
+  git -C "$QUARANTINE_REPO" pull --ff-only
+  log "re-executing with updated code"
+  exec "$0" start
+}
+
+# ---------------------------------------------------------------------------
+# destroy
+# ---------------------------------------------------------------------------
+
+cmd_destroy() {
+  load_config
+  acquire_lock "$QUARANTINE_REPO" "$QUARANTINE_ENV"
+  warn "this stops and removes all containers for environment '${QUARANTINE_ENV}' (volumes are preserved)"
+  confirm_typed "Type the environment name to confirm destruction" "$QUARANTINE_ENV" || die "confirmation failed — aborted"
+
+  local catalog_list
+  catalog_list="$(catalog_names)" || die "failed to read catalog.yaml — check for syntax errors"
+
+  local -a all_profiles=(--profile observability --profile gitops)
+  local name
+  while IFS= read -r name; do
+    [[ -z "$name" ]] && continue
+    all_profiles+=(--profile "$name")
+  done <<< "$catalog_list"
+
+  qcompose "$QUARANTINE_ENV" "${all_profiles[@]}" down
+  log "environment '${QUARANTINE_ENV}' destroyed (volumes preserved) — 'quarantine start' recreates containers from the same state"
+}
+
+# ---------------------------------------------------------------------------
+# dispatch
+# ---------------------------------------------------------------------------
+
+usage() {
+  cat <<'EOF'
+Usage: quarantine <command> [options]
+
+Commands:
+  init [--domain D] [--env E] [--email M] [--cf-token T] [--age-key-file P]
+                          One-time interactive setup (flags for CI use).
+  start                   Idempotent reconcile: bring this environment's
+                          desired state (core infra + manifest apps) up.
+  app add <name> [--version V]
+                          Add an app from catalog.yaml to this environment.
+  app remove <name>       Remove an app from this environment's manifest.
+  status                  Show container status for this environment.
+  upgrade                 git pull --ff-only, then start.
+  destroy                 Stop and remove all containers (volumes kept).
+
+Run 'quarantine init --help' for init's own options.
+EOF
+}
+
+main() {
+  local cmd="${1:-}"
+  [[ $# -gt 0 ]] && shift
+
+  case "$cmd" in
+    init) cmd_init "$@" ;;
+    start) cmd_start "$@" ;;
+    app)
+      local subcmd="${1:-}"
+      [[ $# -gt 0 ]] && shift
+      case "$subcmd" in
+        add) cmd_app_add "$@" ;;
+        remove) cmd_app_remove "$@" ;;
+        *) usage >&2; die "unknown 'app' subcommand: ${subcmd}" ;;
+      esac
+      ;;
+    status) cmd_status "$@" ;;
+    upgrade) cmd_upgrade "$@" ;;
+    destroy) cmd_destroy "$@" ;;
+    -h|--help|help|"") usage; exit 0 ;;
+    *) usage >&2; die "unknown command: ${cmd}" ;;
+  esac
+}
+
+main "$@"

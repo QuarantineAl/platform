@@ -1,0 +1,49 @@
+# infra/data/postgres/compose.yaml — the one shared PostgreSQL instance for this
+# environment (decision 4). Every app gets its own database + role via
+# provisioners/postgres.sh; apps never share a database.
+#
+# Image choice: stock `postgres`, alpine variant. An earlier revision of
+# this file pinned ghcr.io/immich-app/postgres (a Postgres 14 build with
+# the VectorChord vector extension baked in) specifically for Immich, which
+# has since been deferred out of the initial catalog — see catalog.yaml and
+# docs/architecture.md's Status section. Reverted to stock Postgres rather
+# than keep an app-specific vendor fork as the shared instance every other
+# consumer (Zitadel, every per-app database) also depends on, with zero
+# current consumers needing it. If/when Immich (or any app needing a
+# non-stock extension) returns to the catalog, give it its own dedicated
+# Postgres inside its own apps/third-party/ folder instead of
+# reintroducing a vendor fork here — this shared instance should stay
+# plain stock Postgres.
+#
+# PIN CHECKPOINT: postgres:17.10-alpine (verified 2026-07-26; within
+# Zitadel's supported range of Postgres 14-18 —
+# zitadel.com/docs/self-hosting/manage/database).
+
+services:
+  postgres:
+    image: postgres:17.10-alpine
+    container_name: quarantine-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_ADMIN_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD}
+      POSTGRES_DB: postgres
+    shm_size: 128mb
+    networks:
+      - db
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_ADMIN_USER:-postgres} -d postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+networks:
+  db:
+    name: quarantine-db
+    internal: true
+
+volumes:
+  postgres-data:

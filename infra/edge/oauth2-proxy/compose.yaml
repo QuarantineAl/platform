@@ -1,0 +1,64 @@
+# infra/edge/oauth2-proxy/compose.yaml — forward-auth sidecar for apps
+# with no native OIDC support.
+#
+# Extracted out of what was previously embedded directly in
+# apps/third-party/uptime-kuma/compose.yaml — same service, same env vars,
+# same Traefik labels, just relocated to infra/edge/ since it's a reusable
+# piece of edge infrastructure, not something specific to Uptime Kuma.
+# Still profile-gated identically to today (`profiles: [uptime-kuma]`),
+# since Uptime Kuma remains its only consumer — no behavior change. If a
+# second app needs forward-auth later, this will need generalizing (its
+# own profile, and per-consumer instances or per-consumer routing/cookie
+# domains) rather than assuming a single shared instance covers everyone.
+#
+# PIN CHECKPOINT: quay.io/oauth2-proxy/oauth2-proxy:v7.15.3 (verified
+# 2026-07-26). Confirm before Phase 2.
+
+services:
+  oauth2-proxy:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.3
+    container_name: quarantine-oauth2-proxy
+    restart: unless-stopped
+    profiles: [uptime-kuma]
+    environment:
+      OAUTH2_PROXY_PROVIDER: oidc
+      OAUTH2_PROXY_OIDC_ISSUER_URL: https://auth.${DOMAIN}
+      OAUTH2_PROXY_CLIENT_ID: ${OIDC_CLIENT_ID_UPTIME_KUMA}
+      OAUTH2_PROXY_CLIENT_SECRET: ${OIDC_CLIENT_SECRET_UPTIME_KUMA}
+      OAUTH2_PROXY_COOKIE_SECRET: ${OAUTH2_PROXY_COOKIE_SECRET}
+      OAUTH2_PROXY_EMAIL_DOMAINS: "*"
+      OAUTH2_PROXY_REVERSE_PROXY: "true"
+      OAUTH2_PROXY_HTTP_ADDRESS: 0.0.0.0:4180
+      OAUTH2_PROXY_UPSTREAMS: static://202
+      OAUTH2_PROXY_REDIRECT_URL: https://status.${DOMAIN}/oauth2/callback
+      OAUTH2_PROXY_SET_XAUTHREQUEST: "true"
+      OAUTH2_PROXY_SKIP_PROVIDER_BUTTON: "true"
+      OAUTH2_PROXY_SCOPE: "openid email profile"
+    networks:
+      - edge
+    # No healthcheck: the image is a static distroless binary with no
+    # shell, curl, or wget to probe itself with (confirmed via `docker
+    # run --entrypoint sh`, which fails outright). wait_healthy() accepts
+    # it once Running.
+    labels:
+      - traefik.enable=true
+      - traefik.http.services.oauth2-proxy.loadbalancer.server.port=4180
+
+      - traefik.http.routers.oauth2-proxy.rule=Host(`status.${DOMAIN}`) && PathPrefix(`/oauth2/`)
+      - traefik.http.routers.oauth2-proxy.entrypoints=websecure
+      - traefik.http.routers.oauth2-proxy.tls=true
+      - traefik.http.routers.oauth2-proxy.priority=100
+      - traefik.http.routers.oauth2-proxy.service=oauth2-proxy
+
+      - traefik.http.middlewares.oauth2-auth.forwardauth.address=http://oauth2-proxy:4180/oauth2/auth
+      - traefik.http.middlewares.oauth2-auth.forwardauth.trustForwardHeader=true
+      - traefik.http.middlewares.oauth2-auth.forwardauth.authResponseHeaders=X-Auth-Request-User,X-Auth-Request-Email,X-Auth-Request-Groups,Authorization
+
+      - traefik.http.middlewares.oauth2-errors.errors.status=401-403
+      - traefik.http.middlewares.oauth2-errors.errors.service=oauth2-proxy
+      - traefik.http.middlewares.oauth2-errors.errors.query=/oauth2/sign_in?rd={url}
+      - traefik.http.middlewares.oauth2-errors.errors.statusRewrites.401=302
+
+networks:
+  edge:
+    external: true

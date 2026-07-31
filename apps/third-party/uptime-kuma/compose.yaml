@@ -1,0 +1,66 @@
+# apps/third-party/uptime-kuma/compose.yaml — status.${DOMAIN} (catalog.yaml: uptime-kuma)
+#
+# Uptime Kuma has no native OIDC (catalog.yaml: needs_oidc: true, but the
+# OIDC client it provisions is consumed by the oauth2-proxy sidecar in
+# infra/edge/oauth2-proxy/, not Uptime Kuma itself). Two routers on the
+# same host split public status-page traffic from the authenticated admin
+# UI:
+#   - kuma-public (priority 50): status pages, badges, push-monitor
+#     endpoints, assets — no auth middleware.
+#   - kuma-admin (priority 10, catch-all): everything else (dashboard,
+#     settings, /socket.io) — gated by the oauth2-auth forwardAuth
+#     middleware (defined on the oauth2-proxy service, infra/edge/
+#     oauth2-proxy/compose.yaml — Traefik aggregates middleware/router
+#     definitions project-wide regardless of which file declares them).
+#     Traefik picks the highest-priority MATCHING router, so the public
+#     paths never reach the admin router.
+# oauth2-proxy owns /oauth2/* directly (priority 100, above both).
+#
+# No database (own SQLite volume, catalog.yaml: needs_db: false). Monitors
+# run from inside this host only; an external uptime probe is a separate,
+# out-of-scope concern (see docs/architecture.md).
+#
+# PIN CHECKPOINT: louislam/uptime-kuma:2.4.0 (verified 2026-07-26). Confirm
+# before Phase 2.
+
+services:
+  uptime-kuma:
+    image: louislam/uptime-kuma:${UPTIME_KUMA_VERSION:-2.4.0}
+    container_name: quarantine-uptime-kuma
+    restart: unless-stopped
+    profiles: [uptime-kuma]
+    networks:
+      - edge
+    volumes:
+      - uptime-kuma-data:/app/data
+    # No compose-level healthcheck override: the image ships its own
+    # (CMD-SHELL extra/healthcheck, confirmed via `docker inspect`).
+    labels:
+      - traefik.enable=true
+      - traefik.http.services.uptime-kuma.loadbalancer.server.port=3001
+
+      # public: status pages, badges, push monitors, assets — no auth
+      - traefik.http.routers.kuma-public.rule=Host(`status.${DOMAIN}`) && (PathPrefix(`/status`) || PathPrefix(`/assets`) || PathPrefix(`/upload`) || PathPrefix(`/api/status-page`) || PathPrefix(`/api/badge`) || PathPrefix(`/api/push`) || Path(`/icon.svg`))
+      - traefik.http.routers.kuma-public.entrypoints=websecure
+      - traefik.http.routers.kuma-public.tls=true
+      - traefik.http.routers.kuma-public.priority=50
+      - traefik.http.routers.kuma-public.service=uptime-kuma
+
+      # everything else (dashboard, settings, /socket.io) — behind auth
+      - traefik.http.routers.kuma-admin.rule=Host(`status.${DOMAIN}`)
+      - traefik.http.routers.kuma-admin.entrypoints=websecure
+      - traefik.http.routers.kuma-admin.tls=true
+      - traefik.http.routers.kuma-admin.priority=10
+      # Order matters: middlewares apply outer-to-inner, left-to-right.
+      # oauth2-errors must be OUTSIDE oauth2-auth so it can catch the 401
+      # that forwardAuth short-circuits with — the reverse order lets that
+      # 401 hit the browser directly, with no redirect to sign-in at all.
+      - traefik.http.routers.kuma-admin.middlewares=oauth2-errors,oauth2-auth
+      - traefik.http.routers.kuma-admin.service=uptime-kuma
+
+networks:
+  edge:
+    external: true
+
+volumes:
+  uptime-kuma-data:

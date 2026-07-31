@@ -1,0 +1,72 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended"
+  ],
+  "labels": ["dependencies"],
+  "docker-compose": {
+    "enabled": true
+  },
+  "packageRules": [
+    {
+      "description": "Zitadel ships zitadel-api and zitadel-login as one product on one version scheme — keep them in lockstep instead of letting one drift ahead of the other.",
+      "matchManagers": ["docker-compose"],
+      "matchPackageNames": [
+        "ghcr.io/zitadel/zitadel",
+        "ghcr.io/zitadel/zitadel-login"
+      ],
+      "groupName": "Zitadel (api + login)"
+    },
+    {
+      "description": "Komodo core and periphery are released together at the same version — keep them in lockstep.",
+      "matchManagers": ["docker-compose"],
+      "matchPackageNames": [
+        "ghcr.io/moghtech/komodo-core",
+        "ghcr.io/moghtech/komodo-periphery"
+      ],
+      "groupName": "Komodo (core + periphery)"
+    },
+    {
+      "description": "ClickHouse server and keeper need matching versions to avoid protocol/version skew between them.",
+      "matchManagers": ["docker-compose"],
+      "matchPackageNames": [
+        "clickhouse/clickhouse-server",
+        "clickhouse/clickhouse-keeper"
+      ],
+      "groupName": "ClickHouse (server + keeper)"
+    },
+    {
+      "description": "install.sh pins sops and yq by exact version PLUS a hand-verified SHA-256 checksum per architecture. This custom manager only bumps the version string in install.sh — it cannot know the new release's checksums.",
+      "matchManagers": ["custom.regex"],
+      "matchFileNames": ["install.sh"],
+      "groupName": "install.sh pinned tool versions (sops, yq)",
+      "prBodyNotes": [
+        "**Manual follow-up required before merging:** install.sh hardcodes a SHA-256 checksum for this binary alongside the version pin (`SOPS_SHA256_AMD64`/`SOPS_SHA256_ARM64` or `YQ_SHA256_AMD64`/`YQ_SHA256_ARM64`). This PR only updates the version string — fetch the matching checksum(s) for the new release from the upstream project and update install.sh by hand, or the installer will fail at install time with a checksum-mismatch error."
+      ]
+    }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Track the SOPS_VERSION pinned in install.sh against github.com/getsops/sops releases.",
+      "fileMatch": ["^install\\.sh$"],
+      "matchStrings": [
+        "SOPS_VERSION=\"(?<currentValue>[^\"]+)\""
+      ],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "getsops/sops",
+      "extractVersionTemplate": "^v?(?<version>.*)$"
+    },
+    {
+      "customType": "regex",
+      "description": "Track the YQ_VERSION pinned in install.sh against github.com/mikefarah/yq releases (the Go mikefarah/yq this codebase requires, not the unrelated Python kislyuk/yq).",
+      "fileMatch": ["^install\\.sh$"],
+      "matchStrings": [
+        "YQ_VERSION=\"(?<currentValue>[^\"]+)\""
+      ],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "mikefarah/yq",
+      "extractVersionTemplate": "^v?(?<version>.*)$"
+    }
+  ]
+}

@@ -1,0 +1,174 @@
+# infra/identity/zitadel/compose.yaml — OIDC identity provider.
+#
+# Zitadel v4 splits into two containers: the API (gRPC/Connect/OIDC/scratch
+# image, no shell) and a separate Login v2 UI (Next.js) that Login v2 makes
+# mandatory. Traefik routes by path on the same host, adapted here from
+# Zitadel's own reference compose (github.com/zitadel/zitadel/deploy/compose)
+# to our shared Traefik instance instead of a dedicated one: "/ui/v2/login"
+# and "/" go to zitadel-login; "/api" (stripped) and everything else go to
+# zitadel-api. Our edge entrypoint `web` already redirects to `websecure`
+# with the wildcard cert (infra/edge/traefik/compose.yaml), so unlike upstream's
+# example we only need the websecure-entrypoint router variants.
+#
+# Database: DSN mode against the shared Postgres instance (decision 4).
+# DSN mode requires the zitadel role + database to already exist — this
+# compose fragment does NOT create them. `quarantine start` runs
+# `provisioners/postgres.sh zitadel` (idempotent) right after Postgres is
+# healthy and BEFORE starting zitadel-api, exactly the same idempotent
+# ensure-role-and-database routine catalog apps get, just invoked directly
+# for this core service instead of through the catalog/manifest loop.
+#
+# Provisioner PAT: on first boot only, ZITADEL_FIRSTINSTANCE_ORG_MACHINE_*
+# bootstraps a dedicated IAM_OWNER service user for OUR automation (separate
+# from LOGINCLIENT, which is Login v2's own internal service account) and
+# writes its PAT to the shared zitadel-bootstrap volume. `quarantine start`
+# reads that file exactly once — the first time core.zitadel.provisioner_pat
+# in secrets.sops.yaml is still its placeholder value — persists it via
+# secrets_set, and never reads the bootstrap file again. From then on
+# provisioners/zitadel.sh authenticates with the persisted PAT.
+#
+# PIN CHECKPOINT: ghcr.io/zitadel/zitadel:v4.16.1 +
+# ghcr.io/zitadel/zitadel-login:v4.16.1 (verified 2026-07-26, matching
+# tags — the two images ship in lockstep). Confirm before Phase 2.
+
+services:
+  zitadel-api:
+    image: ghcr.io/zitadel/zitadel:v4.16.1
+    container_name: quarantine-zitadel-api
+    restart: unless-stopped
+    user: "0" # matches upstream: bootstrap PAT files are shared with zitadel-login via a root-writable volume
+    command: start-from-init --masterkey "${ZITADEL_MASTERKEY}"
+    environment:
+      ZITADEL_PORT: 8080
+      ZITADEL_EXTERNALDOMAIN: auth.${DOMAIN}
+      ZITADEL_EXTERNALPORT: 443
+      ZITADEL_EXTERNALSECURE: "true"
+      ZITADEL_TLS_ENABLED: "false" # Traefik terminates TLS; zitadel-api speaks plaintext h2c internally
+
+      ZITADEL_DATABASE_POSTGRES_DSN: ${ZITADEL_DATABASE_POSTGRES_DSN}
+
+      # --- first-instance bootstrap (idempotent: only applies once, at
+      # first-ever `init`; safe to leave set on every subsequent start) ---
+      ZITADEL_FIRSTINSTANCE_ORG_NAME: ${ZITADEL_ORG_NAME:-quarantine}
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_USERNAME: ${ZITADEL_ADMIN_USERNAME:-admin}
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_FIRSTNAME: Admin
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_LASTNAME: Admin
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_EMAIL_ADDRESS: ${ACME_EMAIL}
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_EMAIL_VERIFIED: "true"
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_PASSWORD: ${ZITADEL_ADMIN_PASSWORD}
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_PASSWORDCHANGEREQUIRED: "false"
+
+      # Login v2's own internal service account (talks to zitadel-api only,
+      # never leaves the edge network)
+      ZITADEL_FIRSTINSTANCE_ORG_LOGINCLIENT_MACHINE_USERNAME: login-client
+      ZITADEL_FIRSTINSTANCE_ORG_LOGINCLIENT_MACHINE_NAME: "quarantine login-client (auto)"
+      ZITADEL_FIRSTINSTANCE_ORG_LOGINCLIENT_PAT_EXPIRATIONDATE: "2099-01-01T00:00:00Z"
+      ZITADEL_FIRSTINSTANCE_LOGINCLIENTPATPATH: /zitadel/bootstrap/login-client.pat
+
+      # OUR provisioner's service account (used by provisioners/zitadel.sh
+      # for catalog-app project/OIDC-client automation — see docs/architecture.md)
+      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_MACHINE_USERNAME: quarantine-provisioner
+      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_MACHINE_NAME: "quarantine provisioner (auto)"
+      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_PAT_EXPIRATIONDATE: "2099-01-01T00:00:00Z"
+      ZITADEL_FIRSTINSTANCE_PATPATH: /zitadel/bootstrap/provisioner.pat
+
+      ZITADEL_DEFAULTINSTANCE_FEATURES_LOGINV2_REQUIRED: "true"
+      ZITADEL_DEFAULTINSTANCE_FEATURES_LOGINV2_BASEURI: https://auth.${DOMAIN}/ui/v2/login/
+      ZITADEL_OIDC_DEFAULTLOGINURLV2: https://auth.${DOMAIN}/ui/v2/login/login?authRequest=
+      ZITADEL_OIDC_DEFAULTLOGOUTURLV2: https://auth.${DOMAIN}/ui/v2/login/logout?post_logout_redirect=
+
+      # optional: export traces to the shared observability otel-collector
+      # (infra/observability/). Unset (default empty) disables this.
+      ZITADEL_INSTRUMENTATION_TRACE_EXPORTER_TYPE: ${ZITADEL_TRACE_EXPORTER_TYPE:-}
+      ZITADEL_INSTRUMENTATION_TRACE_EXPORTER_ENDPOINT: ${ZITADEL_TRACE_EXPORTER_ENDPOINT:-otel-collector:4317}
+      ZITADEL_INSTRUMENTATION_TRACE_EXPORTER_INSECURE: "true"
+      ZITADEL_INSTRUMENTATION_SERVICENAME: zitadel
+    healthcheck:
+      test: ["CMD", "/app/zitadel", "ready"]
+      interval: 10s
+      timeout: 30s
+      retries: 12
+      start_period: 20s
+    volumes:
+      - zitadel-bootstrap:/zitadel/bootstrap:rw
+    networks:
+      - edge
+      - db
+    labels:
+      - traefik.enable=true
+
+      - traefik.http.services.zitadel-api.loadbalancer.server.port=8080
+      - traefik.http.services.zitadel-api.loadbalancer.server.scheme=h2c
+
+      - traefik.http.middlewares.zitadel-strip-api.stripprefix.prefixes=/api
+      - traefik.http.middlewares.zitadel-strip-api.stripprefix.forceSlash=false
+
+      # /api/* -> zitadel-api with prefix stripped
+      - traefik.http.routers.zitadel-api-alias.rule=Host(`auth.${DOMAIN}`) && PathPrefix(`/api`)
+      - traefik.http.routers.zitadel-api-alias.entrypoints=websecure
+      - traefik.http.routers.zitadel-api-alias.tls=true
+      - traefik.http.routers.zitadel-api-alias.middlewares=zitadel-strip-api
+      - traefik.http.routers.zitadel-api-alias.service=zitadel-api
+      - traefik.http.routers.zitadel-api-alias.priority=200
+
+      # everything except "/", "/api", "/ui/v2/login" -> zitadel-api
+      # (OIDC/OAuth endpoints, gRPC, Connect-RPC — all share port 8080 via h2c)
+      - traefik.http.routers.zitadel-canonical.rule=Host(`auth.${DOMAIN}`) && !PathPrefix(`/ui/v2/login`) && !PathPrefix(`/api`) && !Path(`/`)
+      - traefik.http.routers.zitadel-canonical.entrypoints=websecure
+      - traefik.http.routers.zitadel-canonical.tls=true
+      - traefik.http.routers.zitadel-canonical.service=zitadel-api
+      - traefik.http.routers.zitadel-canonical.priority=100
+
+  zitadel-login:
+    image: ghcr.io/zitadel/zitadel-login:v4.16.1
+    container_name: quarantine-zitadel-login
+    restart: unless-stopped
+    user: "0"
+    environment:
+      ZITADEL_API_URL: http://zitadel-api:8080
+      NEXT_PUBLIC_BASE_PATH: /ui/v2/login
+      ZITADEL_SERVICE_USER_TOKEN_FILE: /zitadel/bootstrap/login-client.pat
+      CUSTOM_REQUEST_HEADERS: Host:auth.${DOMAIN},X-Forwarded-Proto:https
+    healthcheck:
+      test: ["CMD", "/bin/sh", "-c", "node /app/healthcheck.mjs http://localhost:3000/ui/v2/login/healthy"]
+      interval: 10s
+      timeout: 30s
+      retries: 12
+      start_period: 20s
+    volumes:
+      - zitadel-bootstrap:/zitadel/bootstrap:ro
+    networks:
+      - edge
+    depends_on:
+      zitadel-api:
+        condition: service_healthy
+    labels:
+      - traefik.enable=true
+      - traefik.http.services.zitadel-login.loadbalancer.server.port=3000
+
+      - traefik.http.middlewares.zitadel-root-rewrite.replacepath.path=/ui/v2/login/
+
+      # "/" -> rewritten to the login UI's own root
+      - traefik.http.routers.zitadel-root.rule=Host(`auth.${DOMAIN}`) && Path(`/`)
+      - traefik.http.routers.zitadel-root.entrypoints=websecure
+      - traefik.http.routers.zitadel-root.tls=true
+      - traefik.http.routers.zitadel-root.middlewares=zitadel-root-rewrite
+      - traefik.http.routers.zitadel-root.service=zitadel-login
+      - traefik.http.routers.zitadel-root.priority=400
+
+      # "/ui/v2/login*" -> the login UI itself
+      - traefik.http.routers.zitadel-login.rule=Host(`auth.${DOMAIN}`) && PathPrefix(`/ui/v2/login`)
+      - traefik.http.routers.zitadel-login.entrypoints=websecure
+      - traefik.http.routers.zitadel-login.tls=true
+      - traefik.http.routers.zitadel-login.service=zitadel-login
+      - traefik.http.routers.zitadel-login.priority=250
+
+networks:
+  edge:
+    external: true
+  db:
+    name: quarantine-db
+    internal: true
+
+volumes:
+  zitadel-bootstrap:

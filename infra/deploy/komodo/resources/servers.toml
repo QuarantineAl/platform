@@ -1,0 +1,24 @@
+# infra/deploy/komodo/resources/servers.toml — Komodo Server resources (decision 7).
+#
+# Committed here so Komodo's own configuration is git-tracked, per decision
+# 7. Komodo watches this file via the resource_sync in stacks.toml and
+# applies changes on git pull — the same "environment is just a directory"
+# principle applies to Komodo's own config.
+#
+# The bundled Periphery agent (infra/deploy/komodo/compose.yaml) self-registers as
+# a Server named "primary" on first connect (KOMODO_FIRST_SERVER_NAME),
+# which is why this file doesn't declare it explicitly — declaring it again
+# here would conflict with that auto-registration. Add a [[server]] block
+# per ADDITIONAL managed host (decision 7 anticipates one Periphery per
+# managed host beyond this one); see docs/gitops-prod.md for how to bring a
+# second host under GitOps management.
+#
+# Example for a second host, once you have one:
+#
+# [[server]]
+# name = "prod-worker-1"
+# description = "second managed host"
+# tags = ["prod"]
+# [server.config]
+# address = "http://prod-worker-1:8120"
+# enabled = true

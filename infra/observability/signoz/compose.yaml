@@ -1,0 +1,195 @@
+# infra/observability/signoz/compose.yaml — SigNoz UI/API + its ClickHouse
+# telemetry store.
+#
+# Split out of what was previously one combined observability compose file
+# (before the infra/ restructure), so
+# this SigNoz/ClickHouse stack is separate from the OTLP collector that
+# feeds it (../otel-collector/). Both share the `observability` network
+# (this file owns the authoritative definition below) plus `edge`, since
+# signoz-signoz-0 is Traefik-routed at observability.${DOMAIN}.
+#
+# The schema migrator here (signoz-telemetrystore-migrator) uses the same
+# otel-collector image as ../otel-collector/'s ingester, but its job is
+# preparing ClickHouse's schema for this stack, not OTLP ingestion — hence
+# grouped here rather than with the collector.
+#
+# IMPORTANT PIN CHECKPOINT: SigNoz removed its official docker-compose
+# deployment in mid-2026 in favor of a new generator tool ("Foundry" /
+# `foundryctl`) that produces compose manifests from a casting.yaml —
+# deploy/docker/docker-compose.yaml no longer exists upstream. This file is
+# a hand-reconstruction, service-for-service, from Foundry's own published
+# example (github.com/SigNoz/foundry/blob/main/docs/examples/docker/compose/
+# pours/deployment/), which is the closest thing to an "official" compose
+# SigNoz currently publishes. The mounted configs under ./config/ are
+# copied verbatim from that same example (clickhouse-config.yaml,
+# clickhouse-functions.yaml, clickhouse-keeper.yaml) — nothing in them is
+# hand-invented. Confirm this reconstruction approach before Phase 2;
+# re-verify against a fresh `foundryctl forge` output before relying on
+# this in production.
+#
+# One simplification versus the Foundry example: metastore is SQLite
+# in-container (matching SigNoz's pre-Foundry "legacy" single-node
+# topology) rather than a dedicated postgres:16 container — one fewer
+# moving part, and avoids the question of whether metadata-only storage
+# belongs on the decision-4 shared Postgres instance (it doesn't need
+# anything from it; it's fully separable state).
+#
+# Service names are kept identical to the Foundry example
+# (signoz-telemetrystore-clickhouse-0-0, etc.) because the mounted configs
+# hardcode those hostnames in several DSNs — renaming them means keeping
+# five files in sync instead of one.
+#
+# PIN CHECKPOINT: signoz/signoz:v0.134.0, clickhouse/clickhouse-server:25.12.5,
+# clickhouse/clickhouse-keeper:25.12.5 (verified 2026-07-26, matching
+# Foundry's example pairing for this SigNoz release). Confirm before Phase 2.
+#
+# OIDC note: SigNoz Community Edition's only SSO option is Google Workspace
+# OAuth — generic OIDC/SAML is enterprise-only. This stack uses SigNoz's
+# built-in email/password auth; wiring it to Zitadel is not possible in CE
+# (see docs/architecture.md).
+#
+# Profile-gated behind `observability`, on by default: `quarantine init`
+# defaults every new environment's COMPOSE_PROFILES to include it, so this
+# and ../otel-collector/ start the same way they did before either was gated.
+
+services:
+  signoz-telemetrystore-migrator:
+    image: signoz/signoz-otel-collector:v0.144.6
+    container_name: quarantine-signoz-migrator
+    restart: on-failure
+    profiles: [observability]
+    entrypoint: ["/bin/sh"]
+    command:
+      - -c
+      - |
+        /signoz-otel-collector migrate ready &&
+        /signoz-otel-collector migrate bootstrap &&
+        /signoz-otel-collector migrate sync up &&
+        /signoz-otel-collector migrate async up
+    environment:
+      SIGNOZ_OTEL_COLLECTOR_CLICKHOUSE_DSN: tcp://signoz-telemetrystore-clickhouse-0-0:9000
+      SIGNOZ_OTEL_COLLECTOR_TIMEOUT: 10m
+    networks:
+      - observability
+
+  signoz-telemetrystore-clickhouse-user-scripts:
+    image: clickhouse/clickhouse-server:25.12.5
+    container_name: quarantine-signoz-clickhouse-user-scripts
+    restart: on-failure
+    profiles: [observability]
+    command:
+      - bash
+      - -c
+      - |-
+        version="v0.0.1"
+        node_os=$$(uname -s | tr '[:upper:]' '[:lower:]')
+        node_arch=$$(uname -m | sed s/aarch64/arm64/ | sed s/x86_64/amd64/)
+        echo "Fetching histogram-binary for $${node_os}/$${node_arch}"
+        cd /tmp
+        wget -O histogram-quantile.tar.gz "https://github.com/SigNoz/signoz/releases/download/histogram-quantile%2F$${version}/histogram-quantile_$${node_os}_$${node_arch}.tar.gz"
+        tar -xvzf histogram-quantile.tar.gz
+        mv histogram-quantile /var/lib/clickhouse/user_scripts/histogramQuantile
+    networks:
+      - observability
+    volumes:
+      - signoz-clickhouse-user-scripts:/var/lib/clickhouse/user_scripts
+
+  signoz-telemetrykeeper-clickhousekeeper-0:
+    image: clickhouse/clickhouse-keeper:25.12.5
+    container_name: quarantine-signoz-keeper
+    restart: unless-stopped
+    profiles: [observability]
+    entrypoint:
+      - /usr/bin/clickhouse-keeper
+      - --config-file=/etc/clickhouse-keeper/keeper.yaml
+    networks:
+      - observability
+    volumes:
+      - signoz-keeper-data:/var/lib/clickhouse-keeper
+      - ./config/clickhouse-keeper.yaml:/etc/clickhouse-keeper/keeper.yaml:ro
+    healthcheck:
+      test: ["CMD", "clickhouse-keeper-client", "-h", "localhost", "-p", "9181", "-q", "ls"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  signoz-telemetrystore-clickhouse-0-0:
+    image: clickhouse/clickhouse-server:25.12.5
+    container_name: quarantine-signoz-clickhouse
+    restart: unless-stopped
+    profiles: [observability]
+    depends_on:
+      signoz-telemetrykeeper-clickhousekeeper-0:
+        condition: service_healthy
+      signoz-telemetrystore-clickhouse-user-scripts:
+        condition: service_completed_successfully
+    environment:
+      CLICKHOUSE_SKIP_USER_SETUP: "1"
+      CLICKHOUSE_CONFIG: /etc/clickhouse-server/config-0-0.yaml
+    networks:
+      - observability
+    volumes:
+      - signoz-clickhouse-data:/var/lib/clickhouse
+      - signoz-clickhouse-user-scripts:/var/lib/clickhouse/user_scripts:ro
+      - ./config/clickhouse-config.yaml:/etc/clickhouse-server/config-0-0.yaml:ro
+      - ./config/clickhouse-functions.yaml:/etc/clickhouse-server/functions.yaml:ro
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  signoz-signoz-0:
+    image: signoz/signoz:v0.134.0
+    container_name: quarantine-signoz
+    restart: unless-stopped
+    profiles: [observability]
+    depends_on:
+      signoz-telemetrystore-clickhouse-0-0:
+        condition: service_healthy
+      signoz-telemetrystore-migrator:
+        condition: service_completed_successfully
+    environment:
+      # SQLite metastore (see header comment) instead of Foundry's default
+      # postgres:16 — dashboards/alerts config only, no telemetry data.
+      SIGNOZ_SQLSTORE_PROVIDER: sqlite
+      SIGNOZ_SQLSTORE_SQLITE_PATH: /var/lib/signoz/signoz.db
+      SIGNOZ_TELEMETRYSTORE_PROVIDER: clickhouse
+      SIGNOZ_TELEMETRYSTORE_CLICKHOUSE_DSN: tcp://signoz-telemetrystore-clickhouse-0-0:9000
+      SIGNOZ_ALERTMANAGER_PROVIDER: signoz
+    networks:
+      - observability
+      - edge
+    volumes:
+      - signoz-sqlite:/var/lib/signoz
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.observability.rule=Host(`observability.${DOMAIN}`)
+      - traefik.http.routers.observability.entrypoints=websecure
+      - traefik.http.routers.observability.tls=true
+      - traefik.http.services.observability.loadbalancer.server.port=8080
+
+networks:
+  edge:
+    external: true
+  observability:
+    name: quarantine-observability
+    # NOT internal: signoz-telemetrystore-clickhouse-user-scripts needs
+    # outbound internet access to fetch the histogramQuantile binary from
+    # GitHub releases at startup. Nothing on this network is inbound-
+    # reachable regardless — that's controlled by Traefik/edge attachment,
+    # which only signoz-signoz-0 and ../otel-collector/'s ingester have.
+
+volumes:
+  signoz-clickhouse-data:
+  signoz-clickhouse-user-scripts:
+  signoz-keeper-data:
+  signoz-sqlite:

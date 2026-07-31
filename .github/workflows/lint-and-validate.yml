@@ -1,0 +1,121 @@
+# The second CI workflow, filling in the "Phase 4 scope" gap called out in
+# verify-secrets-encrypted.yml's header comment. Two independent, narrow
+# checks:
+#
+#   1. shellcheck — every shell script in the repo, at warning severity
+#      with -x (follow sourced files where possible). severity=warning
+#      already excludes the one accepted info-level finding (SC1091 in
+#      every script that `source`s ../lib/common.sh via a
+#      dynamically-resolved path shellcheck can't follow at lint time —
+#      known, accepted, not fixable, not worth a special-case suppression
+#      syntax on top of the severity filter that already handles it).
+#
+#   2. compose-validate — `docker compose config` against
+#      environments/_template/compose.yaml with every profile flag
+#      (observability, gitops, uptime-kuma), to structurally validate the
+#      assembled compose graph (include: resolution, var interpolation,
+#      profile gating) parses and merges cleanly. This needs *some* value
+#      for every ${VAR} the included fragments reference — those vars only
+#      get real values once `quarantine init`/`start` has generated an
+#      actual environment .env from secrets.sops.yaml, which doesn't exist
+#      in CI — so this step exports dummy placeholder values for each one
+#      into a throwaway --env-file first. This validates shape only: it
+#      does not (and can't, without a live target host) confirm the stack
+#      actually boots, that Traefik gets real certs, or that any
+#      provisioner/OIDC/DB wiring behaves — see docs/architecture.md for
+#      what's still missing.
+#
+# `quarantine` itself (init/start/app add/remove/status/upgrade/destroy)
+# isn't exercised end-to-end here — there's no CI stand-in yet for a real
+# target server with Docker, open :80/:443, and a Cloudflare-delegated
+# domain. That remains manual / Phase 4+ scope.
+
+name: lint-and-validate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: shellcheck every shell script in the repo
+        shell: bash
+        run: |
+          set -euo pipefail
+          scripts=(
+            install.sh
+            bin/quarantine
+            provisioners/postgres.sh
+            provisioners/zitadel.sh
+            scripts/new-app.sh
+            lib/common.sh
+          )
+          # -x: follow sourced files where shellcheck can resolve the path.
+          # severity=warning: fail on warning-or-above only — this is what
+          # excludes the one accepted info-level SC1091 finding described
+          # above without needing a per-file/per-line suppression.
+          shellcheck --severity=warning -x "${scripts[@]}"
+
+  compose-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Write dummy .env for compose var interpolation
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Every ${VAR} referenced anywhere in environments/_template/
+          # compose.yaml or the infra/*/compose.yaml + apps/third-party/
+          # uptime-kuma/compose.yaml fragments it includes. Values are
+          # throwaway placeholders good for exactly one thing: letting
+          # `docker compose config` interpolate and structurally validate
+          # the assembled graph — they are never used to actually start
+          # anything, and are NOT a substitute for real generated secrets.
+          cat > /tmp/quarantine-ci.env <<'EOF'
+          DOMAIN=example-ci.test
+          ACME_EMAIL=ci@example-ci.test
+          CF_DNS_API_TOKEN=dummy-cf-dns-api-token
+          TRAEFIK_LOG_LEVEL=INFO
+          POSTGRES_ADMIN_USER=postgres
+          POSTGRES_ADMIN_PASSWORD=dummy-postgres-admin-password
+          ZITADEL_MASTERKEY=dummy-zitadel-masterkey-32byte!
+          ZITADEL_DATABASE_POSTGRES_DSN=postgresql://zitadel:dummy@postgres:5432/zitadel?sslmode=disable
+          ZITADEL_ORG_NAME=quarantine
+          ZITADEL_ADMIN_USERNAME=admin
+          ZITADEL_ADMIN_PASSWORD=dummy-zitadel-admin-password
+          ZITADEL_TRACE_EXPORTER_TYPE=
+          ZITADEL_TRACE_EXPORTER_ENDPOINT=otel-collector:4317
+          UPTIME_KUMA_VERSION=2.4.0
+          OIDC_CLIENT_ID_UPTIME_KUMA=dummy-oidc-client-id
+          OIDC_CLIENT_SECRET_UPTIME_KUMA=dummy-oidc-client-secret
+          OAUTH2_PROXY_COOKIE_SECRET=dummy-cookie-secret-value
+          KOMODO_DATABASE_USERNAME=komodo
+          KOMODO_DATABASE_PASSWORD=dummy-komodo-database-password
+          KOMODO_ADMIN_USERNAME=admin
+          KOMODO_ADMIN_PASSWORD=dummy-komodo-admin-password
+          KOMODO_JWT_SECRET=dummy-komodo-jwt-secret
+          KOMODO_WEBHOOK_SECRET=dummy-komodo-webhook-secret
+          EOF
+
+      - name: docker compose config (observability + gitops + uptime-kuma profiles)
+        shell: bash
+        working-directory: environments/_template
+        run: |
+          set -euo pipefail
+          docker compose \
+            --env-file /tmp/quarantine-ci.env \
+            --profile observability \
+            --profile gitops \
+            --profile uptime-kuma \
+            -f compose.yaml \
+            config

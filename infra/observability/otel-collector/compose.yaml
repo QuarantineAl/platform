@@ -1,0 +1,63 @@
+# infra/observability/otel-collector/compose.yaml — OTLP ingestion.
+#
+# Split out of what was previously one combined observability compose file
+# (before the infra/ restructure), so
+# the collector (this file) is separate from the SigNoz/ClickHouse stack it
+# feeds (../signoz/). Both share the `observability` network (declared in
+# both, merged by Compose's `include:` — see ../signoz/compose.yaml for the
+# authoritative definition with its "why not internal" rationale) plus
+# `edge`, since apps emitting OTLP reach this collector at otel-collector:4317.
+#
+# IMPORTANT PIN CHECKPOINT: SigNoz removed its official docker-compose
+# deployment in mid-2026 in favor of a new generator tool ("Foundry" /
+# `foundryctl`). This file is a hand-reconstruction, service-for-service,
+# from Foundry's own published example
+# (github.com/SigNoz/foundry/blob/main/docs/examples/docker/compose/
+# pours/deployment/ingester/). The mounted configs under ./config/
+# (ingester.yaml, opamp.yaml) are copied verbatim from that same example —
+# nothing in them is hand-invented. Confirm this reconstruction approach
+# before Phase 2; re-verify against a fresh `foundryctl forge` output
+# before relying on this in production.
+#
+# PIN CHECKPOINT: signoz/signoz-otel-collector:v0.144.6 (verified
+# 2026-07-26). Confirm before Phase 2.
+#
+# Profile-gated behind `observability`, on by default: `quarantine init`
+# defaults every new environment's COMPOSE_PROFILES to include it, so this
+# and ../signoz/ start the same way they did before either was gated.
+
+services:
+  ingester:
+    image: signoz/signoz-otel-collector:v0.144.6
+    container_name: quarantine-signoz-ingester
+    restart: unless-stopped
+    profiles: [observability]
+    entrypoint: ["/bin/sh"]
+    command:
+      - -c
+      - |
+        /signoz-otel-collector migrate sync check &&
+        /signoz-otel-collector --config=/etc/otel-collector-config.yaml --manager-config=/etc/opamp-config.yaml --copy-path=/var/tmp/collector-config.yaml
+    environment:
+      SIGNOZ_OTEL_COLLECTOR_CLICKHOUSE_DSN: tcp://signoz-telemetrystore-clickhouse-0-0:9000
+      SIGNOZ_OTEL_COLLECTOR_TIMEOUT: 10m
+    networks:
+      observability:
+        aliases:
+          - signoz-ingester
+      edge:
+        # other services reach OTLP here as otel-collector:4317 / :4318
+        aliases:
+          - otel-collector
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+    volumes:
+      - ./config/ingester.yaml:/etc/otel-collector-config.yaml:ro
+      - ./config/opamp.yaml:/etc/opamp-config.yaml:ro
+
+networks:
+  edge:
+    external: true
+  observability:
+    name: quarantine-observability

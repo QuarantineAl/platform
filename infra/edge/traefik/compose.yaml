@@ -1,0 +1,85 @@
+# infra/edge/traefik/compose.yaml — edge proxy: TLS termination, ACME, routing.
+#
+# Wildcard cert strategy: one router (this service's own dashboard router)
+# requests *.${DOMAIN} + ${DOMAIN} via the `letsencrypt` resolver
+# (Cloudflare DNS-01 — the only challenge type ACME allows for wildcards).
+# Once issued, every other router in this repo just declares `tls: {}`
+# (no certresolver) and Traefik's TLS store matches it by SNI automatically
+# — no per-app ACME requests needed. `letsencrypt-http` is a second
+# resolver apps can opt into per-router (HTTP-01, no Cloudflare token
+# required) as a documented fallback — e.g. during initial bring-up before
+# CF_DNS_API_TOKEN is configured, DNS check in `quarantine init`/`start`
+# only warns, never blocks, so TLS degrades to self-signed until whichever
+# resolver succeeds.
+#
+# PIN CHECKPOINT: traefik:v3.7.9 (verified 2026-07-26). Confirm before Phase 2.
+
+services:
+  traefik:
+    image: traefik:v3.7.9
+    container_name: quarantine-traefik
+    restart: unless-stopped
+    command:
+      - --log.level=${TRAEFIK_LOG_LEVEL:-INFO}
+      - --accesslog=true
+      - --ping=true
+      - --api.dashboard=true
+      # docker provider: label-driven discovery only, no accidental exposure
+      - --providers.docker=true
+      - --providers.docker.exposedByDefault=false
+      - --providers.docker.network=edge
+      # entrypoints
+      - --entrypoints.web.address=:80
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --entrypoints.websecure.address=:443
+      # ACME resolver 1: Cloudflare DNS-01 — wildcard-capable, primary
+      - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}
+      - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.letsencrypt.acme.dnschallenge=true
+      - --certificatesresolvers.letsencrypt.acme.dnschallenge.provider=cloudflare
+      - --certificatesresolvers.letsencrypt.acme.dnschallenge.resolvers=1.1.1.1:53,8.8.8.8:53
+      # ACME resolver 2: HTTP-01 fallback — per-router opt-in, no wildcard,
+      # no Cloudflare token required
+      - --certificatesresolvers.letsencrypt-http.acme.email=${ACME_EMAIL}
+      - --certificatesresolvers.letsencrypt-http.acme.storage=/letsencrypt/acme-http.json
+      - --certificatesresolvers.letsencrypt-http.acme.httpchallenge=true
+      - --certificatesresolvers.letsencrypt-http.acme.httpchallenge.entrypoint=web
+    environment:
+      # PIN CHECKPOINT: env var name for the Cloudflare API token. A scoped
+      # token (Zone / DNS / Edit, restricted to the target zone) is used
+      # here, NOT the legacy CF_API_EMAIL + CF_API_KEY global-key pair.
+      CF_DNS_API_TOKEN: ${CF_DNS_API_TOKEN}
+    ports:
+      - "80:80"
+      - "443:443"
+    networks:
+      - edge
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik-certs:/letsencrypt
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    labels:
+      - traefik.enable=true
+      # Requests the wildcard cert once at startup; no public router is
+      # created for the dashboard itself (kept unexposed by default — see
+      # docs/architecture.md for how to front it with oauth2-proxy).
+      - traefik.http.routers.quarantine-wildcard-cert.rule=Host(`${DOMAIN}`)
+      - traefik.http.routers.quarantine-wildcard-cert.entrypoints=websecure
+      - traefik.http.routers.quarantine-wildcard-cert.tls=true
+      - traefik.http.routers.quarantine-wildcard-cert.tls.certresolver=letsencrypt
+      - traefik.http.routers.quarantine-wildcard-cert.tls.domains[0].main=${DOMAIN}
+      - traefik.http.routers.quarantine-wildcard-cert.tls.domains[0].sans=*.${DOMAIN}
+      - traefik.http.routers.quarantine-wildcard-cert.service=api@internal
+
+networks:
+  edge:
+    external: true
+
+volumes:
+  traefik-certs:

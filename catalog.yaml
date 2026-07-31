@@ -1,0 +1,43 @@
+# catalog.yaml — the registry of every app `quarantine app add` knows how to
+# deploy. This file is metadata ONLY: nothing app-specific is hardcoded in
+# bin/quarantine or provisioners/*.sh. Both read this file at runtime to
+# decide what to provision.
+#
+# Field reference:
+#   name          matches the compose `profile` name and the manifest.yaml
+#                 entry; also the basis for exported <APP>_VERSION vars
+#                 (upper-cased, hyphens -> underscores) and injected
+#                 DATABASE_URL_<APP> / OIDC_CLIENT_ID_<APP> / etc. vars.
+#   kind          "core" (always on, not user-removable) or "app" (third
+#                 party, catalog-managed via `quarantine app add/remove`).
+#   compose_path  path to the compose fragment, relative to repo root.
+#   subdomain     the Traefik Host() label prefix; full host is
+#                 <subdomain>.${DOMAIN}.
+#   needs_db      if true, `provisioners/postgres.sh` creates a database +
+#                 role named after `name` (hyphens -> underscores) before
+#                 the app starts.
+#   needs_oidc    if true, `provisioners/zitadel.sh` creates a Zitadel
+#                 project + OIDC client before the app starts, and the
+#                 CLI injects OIDC_CLIENT_ID_<APP> / OIDC_CLIENT_SECRET_<APP>.
+#   oidc_redirect_uris
+#                 redirect URIs registered on the OIDC client. Only present
+#                 when needs_oidc is true.
+#   notes         free-text caveats surfaced by `quarantine app add` and in
+#                 docs/adding-an-app.md.
+
+apps:
+  - name: uptime-kuma
+    kind: app
+    compose_path: apps/third-party/uptime-kuma/compose.yaml
+    subdomain: status
+    needs_db: false
+    needs_oidc: true
+    oidc_redirect_uris:
+      - "https://status.${DOMAIN}/oauth2/callback"
+    notes: >-
+      Uptime Kuma itself has no native OIDC support — the OIDC client this
+      entry provisions is consumed by an oauth2-proxy sidecar (not Uptime
+      Kuma directly), which forward-auth-protects the admin UI while public
+      status-page paths stay unauthenticated on the same host. Monitors run
+      from inside this host only — an external uptime probe is a separate,
+      out-of-scope concern (see docs/architecture.md).
