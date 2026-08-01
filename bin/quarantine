@@ -394,6 +394,7 @@ generate_secrets() {
   local encrypted_tmp
   encrypted_tmp="$(mktemp "${secrets_file}.XXXXXX")"
   if ! SOPS_AGE_KEY_FILE="$age_key" sops --encrypt \
+    --config "${repo_root}/.sops.yaml" \
     --input-type yaml --output-type yaml \
     --filename-override "$secrets_file" \
     "$tmp" > "$encrypted_tmp"; then
