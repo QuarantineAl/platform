@@ -41,9 +41,16 @@ placeholder). Once it has a home, either edit the default in `install.sh`
 or override it at install time:
 
 ```bash
-QUARANTINE_REPO_URL=https://github.com/your-actual-org/quarantine.git \
-  curl -fsSL <raw-url-to-install.sh> | sudo bash
+curl -fsSL <raw-url-to-install.sh> | \
+  sudo QUARANTINE_REPO_URL=https://github.com/your-actual-org/quarantine.git bash
 ```
+
+The env var has to go on the `sudo ... bash` side of the pipe, not before
+`curl` — `curl` is the only thing that would ever see a variable prefixed
+onto its own invocation, and it doesn't care about `QUARANTINE_REPO_URL`;
+`install.sh`'s own `${QUARANTINE_REPO_URL:-...}` expansion runs inside the
+`bash` process that `sudo` execs to interpret the piped script, so that's
+where the variable actually needs to be set.
 
 `QUARANTINE_INSTALL_DIR` (default `/opt/quarantine/repo`) and
 `QUARANTINE_BIN_LINK` (default `/usr/local/bin/quarantine`) are also
