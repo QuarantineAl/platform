@@ -209,7 +209,7 @@ secrets_decrypt_to_tmpfs() {
   tmp="$(mktemp "${tmp_dir%/}/quarantine-secrets.XXXXXX")"
   chmod 600 "$tmp"
 
-  if ! SOPS_AGE_KEY_FILE="$age_key" sops --decrypt "$enc_file" > "$tmp" 2>/dev/null; then
+  if ! SOPS_AGE_KEY_FILE="$age_key" sops --decrypt --config "${repo_root}/.sops.yaml" "$enc_file" > "$tmp" 2>/dev/null; then
     shred_file "$tmp"
     die "failed to decrypt secrets for '$env' (check age key at $age_key)"
   fi
@@ -224,7 +224,7 @@ secrets_edit() {
   enc_file="$(secrets_file_path "$repo_root" "$env")"
   age_key="$(age_key_path "$env")"
   [[ -f "$age_key" ]] || die "age key not found for environment '$env': $age_key"
-  SOPS_AGE_KEY_FILE="$age_key" sops "$enc_file"
+  SOPS_AGE_KEY_FILE="$age_key" sops --config "${repo_root}/.sops.yaml" "$enc_file"
 }
 
 # _json_escape_string <value> — minimal JSON string-body escaping (backslash
@@ -273,7 +273,7 @@ secrets_set() {
   [[ -n "$sops_path" ]] || die "could not resolve a sops path for key '${key}'"
 
   value_json="\"$(_json_escape_string "$value")\""
-  SOPS_AGE_KEY_FILE="$age_key" sops --set "${sops_path} ${value_json}" "$enc_file" >/dev/null
+  SOPS_AGE_KEY_FILE="$age_key" sops --set --config "${repo_root}/.sops.yaml" "${sops_path} ${value_json}" "$enc_file" >/dev/null
 }
 
 # secrets_get <plaintext_file> <yaml-path> — read one key out of an already
