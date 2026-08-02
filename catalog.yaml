@@ -41,3 +41,26 @@ apps:
       status-page paths stay unauthenticated on the same host. Monitors run
       from inside this host only — an external uptime probe is a separate,
       out-of-scope concern (see docs/architecture.md).
+
+  - name: wg-easy
+    kind: app
+    compose_path: apps/third-party/wg-easy/compose.yaml
+    subdomain: vpn
+    needs_db: false
+    needs_oidc: true
+    oidc_redirect_uris:
+      - "https://vpn.${DOMAIN}/oauth2/callback"
+    notes: >-
+      wg-easy (WireGuard VPN with a web UI) has no native OIDC/SSO — the
+      OIDC client this entry provisions is consumed by a dedicated
+      oauth2-proxy-wg-easy sidecar (infra/edge/oauth2-proxy/compose.yaml),
+      the second consumer of that now-generalized forward-auth pattern
+      (the first, for uptime-kuma, was single-tenant until this app needed
+      its own instance/profile/redirect). wg-easy also gets its own local
+      admin account (first-run INIT_* bootstrap, generated the same way
+      Zitadel/Komodo's own admin passwords are) as a second, independent
+      auth layer behind oauth2-proxy. Its actual WireGuard data plane is
+      UDP and cannot be proxied by Traefik — it's published directly on
+      the host (udp/51820), the first catalog app with that requirement;
+      see apps/third-party/wg-easy/compose.yaml and docs/client-install.md
+      for the host firewall implication.
