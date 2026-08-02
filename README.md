@@ -33,16 +33,16 @@ Three commands: install, init, start.
 symlinks `bin/quarantine` onto `PATH`.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/YOUR_ORG/quarantine/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/QuarantineAl/platform/main/install.sh | sudo bash
 ```
 
-This repo has no real remote yet (`YOUR_ORG` above is a literal
-placeholder). Once it has a home, either edit the default in `install.sh`
-or override it at install time:
+`QUARANTINE_REPO_URL` defaults to this repo
+(`https://github.com/QuarantineAl/platform.git`) — override it only if
+you're installing from a fork or a private mirror:
 
 ```bash
 curl -fsSL <raw-url-to-install.sh> | \
-  sudo QUARANTINE_REPO_URL=https://github.com/your-actual-org/quarantine.git bash
+  sudo QUARANTINE_REPO_URL=https://github.com/your-fork/platform.git bash
 ```
 
 The env var has to go on the `sudo ... bash` side of the pipe, not before
