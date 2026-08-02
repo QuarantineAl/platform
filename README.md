@@ -152,7 +152,8 @@ like them.
 | `quarantine app add <name> [--version V]` | Adds an app from `catalog.yaml` to this environment's manifest. |
 | `quarantine app remove <name>` | Removes an app from this environment's manifest. |
 | `quarantine status` | Shows `docker compose ps` across every profile — observability, gitops, and every catalog app. |
-| `quarantine upgrade` | `git pull --ff-only` in the configured repo, then re-execs `quarantine start`. |
+| `quarantine version` | Prints the version of the repo checkout on disk (`git describe --tags --dirty --always` — a bare commit SHA today, since no tags exist yet; a real `vX.Y.Z` once tagged releases start). |
+| `quarantine upgrade` | Requires the repo to be on branch `main`, fetches and fast-forward-only merges `origin/main`, then re-execs `quarantine start`. |
 | `quarantine destroy` | Requires typing the exact environment name to confirm, then `docker compose down` across every profile. Volumes are explicitly preserved — this is not `-v`. |
 
 Run `quarantine init --help` for init's own full flag reference.

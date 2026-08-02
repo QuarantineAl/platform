@@ -54,7 +54,7 @@ quarantine/
 ## Rationale per top-level folder
 
 **`bin/`** — the single CLI entry point end users and CI invoke:
-`quarantine init/start/app add/app remove/status/upgrade/destroy`. See
+`quarantine init/start/app add/app remove/status/version/upgrade/destroy`. See
 `bin/quarantine`'s own top-of-file comment for its conventions
 (`QUARANTINE_HOME` resolution, `qcompose()`, secrets threading).
 
