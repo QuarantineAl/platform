@@ -807,6 +807,31 @@ cmd_status() {
 }
 
 # ---------------------------------------------------------------------------
+# version
+# ---------------------------------------------------------------------------
+
+# cmd_version — prints the version of the repo checkout currently on disk.
+# Resolved from git (short SHA, or a tag description once any exist), not a
+# hand-maintained file: there's no release/tagging process in this repo
+# yet, and `git describe --tags --always` degrades gracefully today (no
+# tags -> bare short SHA) to a real `vX.Y.Z`-style string the moment tagged
+# releases start landing (e.g. a GitHub Action that tags main on merge) —
+# with no code change needed here either way. `--dirty` flags a checkout
+# with uncommitted local changes, which should never happen on a real
+# deploy host but is worth surfacing if it does.
+cmd_version() {
+  local repo_root="$QUARANTINE_HOME"
+
+  if [[ ! -d "${repo_root}/.git" ]]; then
+    printf 'unknown (no .git checkout at %s)\n' "$repo_root"
+    return 0
+  fi
+
+  git -C "$repo_root" describe --tags --dirty --always 2>/dev/null \
+    || die "failed to resolve version from git at ${repo_root}"
+}
+
+# ---------------------------------------------------------------------------
 # upgrade
 # ---------------------------------------------------------------------------
 
@@ -817,8 +842,8 @@ cmd_upgrade() {
   # QUARANTINE_HOME (resolved from this script's own on-disk location) are
   # only guaranteed to be the same checkout because cmd_init happens to
   # write QUARANTINE_HOME as `repo:` at setup time. If they've since
-  # diverged (a hand-edited quarantine.yaml, a relocated checkout), `git
-  # pull` below would update QUARANTINE_REPO while `exec "$0" start`
+  # diverged (a hand-edited quarantine.yaml, a relocated checkout), the
+  # fetch/merge below would update QUARANTINE_REPO while `exec "$0" start`
   # re-executes the CLI code found at the unrelated, un-pulled
   # QUARANTINE_HOME — silently not updating the CLI's own behavior at all.
   local resolved_repo resolved_home
@@ -827,8 +852,20 @@ cmd_upgrade() {
   [[ "$resolved_repo" == "$resolved_home" ]] \
     || die "configured repo (${QUARANTINE_REPO}) is not the same checkout as this CLI's own location (${QUARANTINE_HOME}) — 'quarantine upgrade' would pull code it then never actually runs; fix quarantine.yaml's 'repo:' field or reinstall"
 
-  log "pulling latest changes in ${QUARANTINE_REPO}"
-  git -C "$QUARANTINE_REPO" pull --ff-only
+  # Explicit fetch + fast-forward-only merge of origin/main, rather than a
+  # bare `git pull` on whatever branch happens to be checked out: a bare
+  # pull silently follows whatever branch (or fails outright on a detached
+  # HEAD) if a host's checkout was ever hand-switched away from main, with
+  # no clearer signal than a confusing downstream failure. Requiring 'main'
+  # explicitly turns that into one clear error at the one place it matters.
+  local current_branch
+  current_branch="$(git -C "$QUARANTINE_REPO" symbolic-ref --short -q HEAD || true)"
+  [[ "$current_branch" == "main" ]] \
+    || die "expected ${QUARANTINE_REPO} to be on branch 'main' for 'quarantine upgrade' (found '${current_branch:-a detached HEAD}') — check out main manually first"
+
+  log "fetching latest 'main' into ${QUARANTINE_REPO}"
+  git -C "$QUARANTINE_REPO" fetch origin main
+  git -C "$QUARANTINE_REPO" merge --ff-only origin/main
   log "re-executing with updated code"
   exec "$0" start
 }
@@ -874,7 +911,8 @@ Commands:
                           Add an app from catalog.yaml to this environment.
   app remove <name>       Remove an app from this environment's manifest.
   status                  Show container status for this environment.
-  upgrade                 git pull --ff-only, then start.
+  version                 Print the version of the repo checkout on disk.
+  upgrade                 Fetch + fast-forward-only merge origin/main, then start.
   destroy                 Stop and remove all containers (volumes kept).
 
 Run 'quarantine init --help' for init's own options.
@@ -898,6 +936,7 @@ main() {
       esac
       ;;
     status) cmd_status "$@" ;;
+    version) cmd_version "$@" ;;
     upgrade) cmd_upgrade "$@" ;;
     destroy) cmd_destroy "$@" ;;
     -h|--help|help|"") usage; exit 0 ;;

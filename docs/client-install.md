@@ -353,18 +353,32 @@ afterward (both subcommands print this reminder). This matters more than
 it sounds: if this environment runs in GitOps mode (`docs/gitops-prod.md`),
 Komodo only sees a change once it's actually pushed.
 
+### Checking the version
+
+```bash
+quarantine version
+```
+
+Prints `git describe --tags --dirty --always` for the repo checkout on
+disk — a bare commit SHA today (this repo has no tagged releases yet), a
+real `vX.Y.Z`-style string once tagged releases start landing, and a
+`-dirty` suffix if the checkout has uncommitted local changes (which
+should never happen on a real deploy host).
+
 ### Upgrading
 
 ```bash
 quarantine upgrade
 ```
 
-`git pull --ff-only`s the configured repo, then re-execs `quarantine
-start`. It first asserts the repo path recorded in
-`/opt/quarantine/quarantine.yaml` and the CLI's own on-disk location
-resolve to the same checkout — if they've diverged (a hand-edited
-`quarantine.yaml`, a relocated checkout), it dies with a clear error
-instead of pulling code it then never actually runs.
+Requires the repo to currently be on branch `main` — dies with a clear
+error otherwise, rather than silently fast-forwarding whatever branch is
+actually checked out. Then fetches and fast-forward-only merges
+`origin/main`, and re-execs `quarantine start`. It first asserts the repo
+path recorded in `/opt/quarantine/quarantine.yaml` and the CLI's own
+on-disk location resolve to the same checkout — if they've diverged (a
+hand-edited `quarantine.yaml`, a relocated checkout), it dies with a clear
+error instead of pulling code it then never actually runs.
 
 ### Destroying
 

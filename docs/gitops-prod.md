@@ -215,10 +215,11 @@ to overlook:
   GitOps-managed host tears down Komodo itself, not just the apps. Volumes
   are preserved, but this is not a command to run against prod outside a
   deliberate, planned decommission.
-- `quarantine upgrade` (`git pull --ff-only` then re-exec `start`) is also
-  a direct-host mutation. On a GitOps-managed prod, upgrading the CLI
-  itself is rarely the point — reconciliation there is Komodo's job — so
-  there's normally no reason to run it against prod at all.
+- `quarantine upgrade` (fetch + fast-forward-only merge of `origin/main`,
+  then re-exec `start`) is also a direct-host mutation. On a GitOps-managed
+  prod, upgrading the CLI itself is rarely the point — reconciliation
+  there is Komodo's job — so there's normally no reason to run it against
+  prod at all.
 
 ## What this doc does not cover
 
