@@ -1,0 +1,96 @@
+# apps/third-party/wg-easy/compose.yaml — vpn.${DOMAIN} (catalog.yaml: wg-easy)
+#
+# wg-easy has no native OIDC/SSO (open feature request, unmerged as of
+# 2026-08 — wg-easy/wg-easy#2374) — same shape as Uptime Kuma:
+# catalog.yaml: needs_oidc: true, but the OIDC client this entry provisions
+# is consumed by a DEDICATED oauth2-proxy-wg-easy sidecar (infra/edge/
+# oauth2-proxy/compose.yaml), not wg-easy itself. This is the SECOND
+# oauth2-proxy consumer — the original instance was single-tenant,
+# hardcoded to Uptime Kuma's client/redirect/cookie domain (see that
+# file's own header comment); adding this one is what generalized it into
+# one named service per consumer instead.
+#
+# wg-easy's own first-run "unattended setup" (INIT_* env vars, read only
+# once — see https://wg-easy.github.io/wg-easy/latest/advanced/config/
+# unattended-setup/) creates a second, independent local admin account —
+# same defense-in-depth layering already used for Uptime Kuma (oauth2-proxy
+# gates the route; the app's own login is a second guard behind it).
+# INIT_PASSWORD is generated the same way Zitadel/Komodo's own admin
+# passwords are (bin/quarantine's REQUIRED_SECRET_KEYS + gen_password at
+# `quarantine init`), never prompted for or hand-set.
+#
+# NOT fully behind Traefik like every other catalog app so far: the actual
+# WireGuard data plane is UDP, which Traefik (HTTP(S)-only) cannot proxy —
+# it's published directly on the host (udp/51820) instead. Only the web UI
+# (tcp/51821) is Traefik-routed. This is the first catalog app with that
+# shape — docs/client-install.md's port prerequisites need udp/51820 open
+# on top of the always-required 80/443 whenever this app is in a manifest.
+#
+# IPv6 explicitly disabled (DISABLE_IPV6=true) to avoid taking on IPv6
+# forwarding sysctls/routing on hosts that were never set up for it — see
+# docs/client-install.md prerequisites, which are IPv4-only throughout.
+#
+# No database (own volume, catalog.yaml: needs_db: false). No compose-level
+# healthcheck override: the image ships its own (`wg show | grep -q
+# interface`, confirmed via its Dockerfile's HEALTHCHECK instruction).
+#
+# PIN CHECKPOINT: ghcr.io/wg-easy/wg-easy:15.3.0 (verified 2026-08-02).
+# Confirm before Phase 2.
+
+services:
+  wg-easy:
+    image: ghcr.io/wg-easy/wg-easy:${WG_EASY_VERSION:-15.3.0}
+    container_name: quarantine-wg-easy
+    restart: unless-stopped
+    profiles: [wg-easy]
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    sysctls:
+      - net.ipv4.ip_forward=1
+      - net.ipv4.conf.all.src_valid_mark=1
+    volumes:
+      - wg-easy-data:/etc/wireguard
+      - /lib/modules:/lib/modules:ro
+    ports:
+      # WireGuard's own data plane. UDP, cannot be routed through Traefik —
+      # published directly on the host. See header comment above.
+      - "51820:51820/udp"
+    environment:
+      PORT: "51821"
+      HOST: "0.0.0.0"
+      DISABLE_IPV6: "true"
+      # Traefik terminates TLS; this container only ever sees plain HTTP
+      # from Traefik over the internal `edge` network. INSECURE here does
+      # NOT mean the UI is exposed over plaintext HTTP to the internet —
+      # same reasoning as every other Traefik-fronted app in this repo,
+      # just something wg-easy needs told explicitly to stop refusing the
+      # connection as insecure.
+      INSECURE: "true"
+      INIT_ENABLED: "true"
+      INIT_USERNAME: admin
+      INIT_PASSWORD: ${WG_EASY_ADMIN_PASSWORD}
+      INIT_HOST: vpn.${DOMAIN}
+      INIT_PORT: "51820"
+    networks:
+      - edge
+    labels:
+      - traefik.enable=true
+      - traefik.http.services.wg-easy.loadbalancer.server.port=51821
+
+      - traefik.http.routers.wg-easy.rule=Host(`vpn.${DOMAIN}`)
+      - traefik.http.routers.wg-easy.entrypoints=websecure
+      - traefik.http.routers.wg-easy.tls=true
+      # Order matters: middlewares apply outer-to-inner, left-to-right —
+      # oauth2-errors-wg-easy must be OUTSIDE oauth2-auth-wg-easy so it can
+      # catch the 401 forwardAuth short-circuits with (see the identical
+      # note on Uptime Kuma's kuma-admin router for the full reasoning).
+      - traefik.http.routers.wg-easy.middlewares=oauth2-errors-wg-easy,oauth2-auth-wg-easy
+      - traefik.http.routers.wg-easy.service=wg-easy
+
+networks:
+  edge:
+    external: true
+
+volumes:
+  wg-easy-data:
