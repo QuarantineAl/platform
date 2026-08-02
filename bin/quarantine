@@ -278,6 +278,7 @@ REQUIRED_SECRET_KEYS=(
   '.core.komodo.webhook_secret'
   '.core.traefik.cloudflare_api_token'
   '.core.oauth2_proxy.cookie_secret'
+  '.apps["wg-easy"].admin_password'
 )
 
 # verify_secrets_complete <plaintext_file>
@@ -520,6 +521,7 @@ generate_env_file() {
   local zitadel_masterkey zitadel_admin_password zitadel_db_password
   local komodo_db_password komodo_admin_password komodo_jwt_secret komodo_webhook_secret
   local oauth2_cookie_secret uptime_kuma_oidc_id uptime_kuma_oidc_secret
+  local wg_easy_admin_password wg_easy_oidc_id wg_easy_oidc_secret
 
   cf_token="$(req_secret "$plaintext" '.core.traefik.cloudflare_api_token' 'Cloudflare API token')"
   pg_admin_password="$(req_secret "$plaintext" '.core.postgres.admin_password' 'Postgres admin password')"
@@ -531,11 +533,21 @@ generate_env_file() {
   komodo_jwt_secret="$(req_secret "$plaintext" '.core.komodo.jwt_secret' 'Komodo JWT secret')"
   komodo_webhook_secret="$(req_secret "$plaintext" '.core.komodo.webhook_secret' 'Komodo webhook secret')"
   oauth2_cookie_secret="$(req_secret "$plaintext" '.core.oauth2_proxy.cookie_secret' 'oauth2-proxy cookie secret')"
+  # wg-easy's own local admin account (its first-run INIT_* unattended
+  # setup, a second auth layer behind oauth2-proxy) — generated at
+  # `quarantine init` the same way the core.komodo.* / oauth2_proxy secrets
+  # above are, not tied to whether wg-easy is actually in this
+  # environment's manifest (same precedent as the Komodo secrets, which
+  # are generated unconditionally regardless of whether `gitops: true` is
+  # ever set).
+  wg_easy_admin_password="$(req_secret "$plaintext" '.apps["wg-easy"].admin_password' 'wg-easy admin password')"
 
   # OIDC client id/secret are legitimately empty until provisioners/zitadel.sh
   # runs — read directly, not via req_secret.
   uptime_kuma_oidc_id="$(secrets_get "$plaintext" '.apps["uptime-kuma"].oidc_client_id')"
   uptime_kuma_oidc_secret="$(secrets_get "$plaintext" '.apps["uptime-kuma"].oidc_client_secret')"
+  wg_easy_oidc_id="$(secrets_get "$plaintext" '.apps["wg-easy"].oidc_client_id')"
+  wg_easy_oidc_secret="$(secrets_get "$plaintext" '.apps["wg-easy"].oidc_client_secret')"
 
   {
     printf 'DOMAIN=%s\n' "$DOMAIN"
@@ -562,6 +574,10 @@ generate_env_file() {
 
     printf 'OIDC_CLIENT_ID_UPTIME_KUMA=%s\n' "$uptime_kuma_oidc_id"
     printf 'OIDC_CLIENT_SECRET_UPTIME_KUMA=%s\n' "$uptime_kuma_oidc_secret"
+
+    printf 'WG_EASY_ADMIN_PASSWORD=%s\n' "$wg_easy_admin_password"
+    printf 'OIDC_CLIENT_ID_WG_EASY=%s\n' "$wg_easy_oidc_id"
+    printf 'OIDC_CLIENT_SECRET_WG_EASY=%s\n' "$wg_easy_oidc_secret"
   } > "$tmp"
 
   # Version vars are computed from the manifest's OWN app list (not a
