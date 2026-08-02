@@ -32,6 +32,11 @@ can issue before the domain resolves anywhere — see [Step
 record the challenge needs), which is a one-time registrar-side change,
 independent of any A record.
 
+Planning to `quarantine app add wg-easy`? Open `udp/51820` on the host too
+— it's the one catalog app whose actual traffic (WireGuard) can't go
+through Traefik, so it's published directly rather than proxied. Not
+needed unless you add that app.
+
 ## Step 1: install system dependencies
 
 `install.sh` is curl-able and installs everything else in this walkthrough

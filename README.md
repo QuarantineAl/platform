@@ -116,12 +116,21 @@ Two things that are *not* part of that default set:
 ## The app catalog
 
 `catalog.yaml` is the registry of every app `quarantine app add` knows
-how to deploy. Today it holds exactly one entry: **uptime-kuma**
-(subdomain `status`, no database, OIDC-fronted). Uptime Kuma itself has
-no native OIDC support, so the OIDC client this entry provisions is
-actually consumed by an oauth2-proxy forward-auth sidecar in front of it,
-not by Uptime Kuma directly — public status-page paths stay
-unauthenticated, only the admin UI is protected.
+how to deploy. Two entries today:
+
+- **uptime-kuma** (subdomain `status`, no database, OIDC-fronted). Uptime
+  Kuma itself has no native OIDC support, so the OIDC client this entry
+  provisions is actually consumed by an oauth2-proxy forward-auth sidecar
+  in front of it, not by Uptime Kuma directly — public status-page paths
+  stay unauthenticated, only the admin UI is protected.
+- **wg-easy** (subdomain `vpn`, no database, OIDC-fronted) — a WireGuard
+  VPN server with a web UI. Same no-native-OIDC shape as Uptime Kuma (its
+  own oauth2-proxy-wg-easy sidecar fronts the admin UI), plus one thing no
+  other catalog app needs: its actual VPN traffic is WireGuard-over-UDP,
+  which Traefik can't proxy, so `udp/51820` is published directly on the
+  host alongside the usual `80`/`443` — open that port too if you add this
+  app to a manifest. See `apps/third-party/wg-easy/compose.yaml` for the
+  full reasoning.
 
 ```bash
 quarantine app add uptime-kuma --version 1.2.3

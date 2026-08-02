@@ -12,7 +12,7 @@
 #
 #   2. compose-validate — `docker compose config` against
 #      environments/_template/compose.yaml with every profile flag
-#      (observability, gitops, uptime-kuma), to structurally validate the
+#      (observability, gitops, uptime-kuma, wg-easy), to structurally validate the
 #      assembled compose graph (include: resolution, var interpolation,
 #      profile gating) parses and merges cleanly. This needs *some* value
 #      for every ${VAR} the included fragments reference — those vars only
@@ -76,7 +76,7 @@ jobs:
           set -euo pipefail
           # Every ${VAR} referenced anywhere in environments/_template/
           # compose.yaml or the infra/*/compose.yaml + apps/third-party/
-          # uptime-kuma/compose.yaml fragments it includes. Values are
+          # {uptime-kuma,wg-easy}/compose.yaml fragments it includes. Values are
           # throwaway placeholders good for exactly one thing: letting
           # `docker compose config` interpolate and structurally validate
           # the assembled graph — they are never used to actually start
@@ -98,6 +98,10 @@ jobs:
           UPTIME_KUMA_VERSION=2.4.0
           OIDC_CLIENT_ID_UPTIME_KUMA=dummy-oidc-client-id
           OIDC_CLIENT_SECRET_UPTIME_KUMA=dummy-oidc-client-secret
+          WG_EASY_VERSION=15.3.0
+          OIDC_CLIENT_ID_WG_EASY=dummy-oidc-client-id
+          OIDC_CLIENT_SECRET_WG_EASY=dummy-oidc-client-secret
+          WG_EASY_ADMIN_PASSWORD=dummy-wg-easy-admin-password
           OAUTH2_PROXY_COOKIE_SECRET=dummy-cookie-secret-value
           KOMODO_DATABASE_USERNAME=komodo
           KOMODO_DATABASE_PASSWORD=dummy-komodo-database-password
@@ -107,7 +111,7 @@ jobs:
           KOMODO_WEBHOOK_SECRET=dummy-komodo-webhook-secret
           EOF
 
-      - name: docker compose config (observability + gitops + uptime-kuma profiles)
+      - name: docker compose config (observability + gitops + uptime-kuma + wg-easy profiles)
         shell: bash
         working-directory: environments/_template
         run: |
@@ -117,5 +121,6 @@ jobs:
             --profile observability \
             --profile gitops \
             --profile uptime-kuma \
+            --profile wg-easy \
             -f compose.yaml \
             config
