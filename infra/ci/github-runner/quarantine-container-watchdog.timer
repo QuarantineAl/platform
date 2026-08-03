@@ -1,0 +1,21 @@
+# infra/ci/github-runner/quarantine-container-watchdog.timer — checks every
+# 2 minutes whether any currently-active service (infra, observability,
+# gitops if enabled, every app in the manifest) has zero containers at all
+# and, if so, brings it up (see watchdog.sh for the full reasoning and why
+# this can't be done from inside CI itself). Manual install on the dev
+# host, once:
+#   ln -s /opt/quarantine/repo/infra/ci/github-runner/quarantine-container-watchdog.service /etc/systemd/system/
+#   ln -s /opt/quarantine/repo/infra/ci/github-runner/quarantine-container-watchdog.timer /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now quarantine-container-watchdog.timer
+# journalctl -u quarantine-container-watchdog.service shows its run history.
+[Unit]
+Description=Run the quarantine container watchdog every 2 minutes
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=2min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target
