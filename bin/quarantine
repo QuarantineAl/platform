@@ -462,7 +462,19 @@ cmd_start() {
   # include graph (infra/ci/github-runner/ is added by hand, dev only —
   # see that fragment's own comment), never by a toggle here. Checking the
   # assembled service list is what actually reflects that.
-  if qcompose "$env" config --services 2>/dev/null | grep -qx 'runner'; then
+  #
+  # QUARANTINE_SKIP_RUNNER opts out of touching the runner service at all.
+  # The reusable CI workflow (QuarantineAl/.github) sets this when it calls
+  # `quarantine start` FROM INSIDE a job running on this very runner pool:
+  # `up -d runner` recreating that container mid-job kills the job that's
+  # doing the recreating (confirmed empirically — a live job got
+  # "The operation was canceled" when its own container got torn down and
+  # replaced out from under it). A human operator running `quarantine
+  # start` directly on the host has no such self-reference problem and
+  # still gets the runner pool reconciled normally.
+  if [[ "${QUARANTINE_SKIP_RUNNER:-false}" == "true" ]]; then
+    log "skipping ci runner pool reconciliation (QUARANTINE_SKIP_RUNNER=true)"
+  elif qcompose "$env" config --services 2>/dev/null | grep -qx 'runner'; then
     log "starting ci runner pool"
     qcompose "$env" up -d runner
   fi
