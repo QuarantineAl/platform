@@ -366,9 +366,12 @@ generate_secrets() {
   QUARANTINE_CF_TOKEN_VALUE="$cf_token" yq eval -i \
     '.core.traefik.cloudflare_api_token = strenv(QUARANTINE_CF_TOKEN_VALUE)' "$tmp"
 
-  # --- deferred: filled in once Zitadel is up and provisioners run --------
+  # --- deferred: filled in once Zitadel is up and provisioners run, or
+  # (github_runner.pat) supplied later by hand for the dev environment only
+  # — see secrets.example.yaml's own comment on that key -------------------
   for key in \
     '.core.zitadel.provisioner_pat' \
+    '.core.github_runner.pat' \
     '.apps["uptime-kuma"].oidc_client_id' \
     '.apps["uptime-kuma"].oidc_client_secret'
   do
@@ -454,6 +457,16 @@ cmd_start() {
     qcompose "$env" --profile gitops up -d
   fi
 
+  # No manifest flag for this on purpose: whether the CI runner exists for
+  # an environment is decided by that environment's own compose.yaml
+  # include graph (infra/ci/github-runner/ is added by hand, dev only —
+  # see that fragment's own comment), never by a toggle here. Checking the
+  # assembled service list is what actually reflects that.
+  if qcompose "$env" config --services 2>/dev/null | grep -qx 'runner'; then
+    log "starting ci runner pool"
+    qcompose "$env" up -d runner
+  fi
+
   reconcile_apps "$repo_root" "$env" "$manifest" "$plaintext"
 
   log "quarantine start complete for environment '${env}'"
@@ -520,6 +533,7 @@ generate_env_file() {
   local zitadel_masterkey zitadel_admin_password zitadel_db_password
   local komodo_db_password komodo_admin_password komodo_jwt_secret komodo_webhook_secret
   local oauth2_cookie_secret uptime_kuma_oidc_id uptime_kuma_oidc_secret
+  local github_runner_pat
 
   cf_token="$(req_secret "$plaintext" '.core.traefik.cloudflare_api_token' 'Cloudflare API token')"
   pg_admin_password="$(req_secret "$plaintext" '.core.postgres.admin_password' 'Postgres admin password')"
@@ -536,6 +550,11 @@ generate_env_file() {
   # runs — read directly, not via req_secret.
   uptime_kuma_oidc_id="$(secrets_get "$plaintext" '.apps["uptime-kuma"].oidc_client_id')"
   uptime_kuma_oidc_secret="$(secrets_get "$plaintext" '.apps["uptime-kuma"].oidc_client_secret')"
+
+  # Dev-environment-only, legitimately empty everywhere else — read
+  # directly, not via req_secret. See secrets.example.yaml's own comment on
+  # core.github_runner.pat for why this isn't in REQUIRED_SECRET_KEYS.
+  github_runner_pat="$(secrets_get "$plaintext" '.core.github_runner.pat')"
 
   {
     printf 'DOMAIN=%s\n' "$DOMAIN"
@@ -562,6 +581,8 @@ generate_env_file() {
 
     printf 'OIDC_CLIENT_ID_UPTIME_KUMA=%s\n' "$uptime_kuma_oidc_id"
     printf 'OIDC_CLIENT_SECRET_UPTIME_KUMA=%s\n' "$uptime_kuma_oidc_secret"
+
+    printf 'GH_RUNNER_PAT=%s\n' "$github_runner_pat"
   } > "$tmp"
 
   # Version vars are computed from the manifest's OWN app list (not a
