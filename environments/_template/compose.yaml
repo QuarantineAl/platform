@@ -51,5 +51,8 @@ include:
   # infra/deploy/komodo/) --------------------------------------------------
   - path: ../../infra/deploy/komodo/compose.yaml
 
+  # --- apps/first-party: profile-gated, one profile per catalog.yaml entry
+  - path: ../../apps/first-party/lazaretto/compose.yaml
+
   # --- apps/third-party: profile-gated, one profile per catalog.yaml entry
   - path: ../../apps/third-party/uptime-kuma/compose.yaml
