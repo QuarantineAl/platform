@@ -37,7 +37,14 @@ services:
     environment:
       FRONTEND_ORIGIN: https://${SUBDOMAIN:-lazaretto}.${DOMAIN}
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3031/health"]
+      # 127.0.0.1, not localhost: this image's /etc/hosts resolves
+      # "localhost" to ::1 as well as 127.0.0.1, and wget tries that first —
+      # Node's HOST=0.0.0.0 binds IPv4 only, so the IPv6 attempt gets
+      # "Connection refused" even though the app is perfectly healthy on
+      # IPv4 (confirmed empirically: a real PR-sandbox test reported
+      # unhealthy while curl from another container succeeded the whole
+      # time — see git history for this line).
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3031/health"]
       interval: 10s
       timeout: 5s
       retries: 5
