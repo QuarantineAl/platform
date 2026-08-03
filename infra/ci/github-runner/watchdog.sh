@@ -40,6 +40,16 @@ QUARANTINE_ENV="$(yq_get "$QUARANTINE_CONFIG_FILE" '.env')"
 manifest="${QUARANTINE_REPO}/environments/${QUARANTINE_ENV}/manifest.yaml"
 project="quarantine-${QUARANTINE_ENV}"
 
+# Same exclusive lock cmd_start/cmd_app_add hold: without it, a watchdog
+# tick landing while a real deploy is mid-flight could race a second
+# `docker compose up -d` against the one already running — the same class
+# of interrupted-operation mess that left orphaned containers behind
+# earlier (see git history). Non-blocking (acquire_lock's own behavior):
+# if another quarantine operation already holds it, this dies with a clear
+# message and a non-zero exit — a normal, expected "skip, try again in two
+# minutes" outcome for a timer-triggered oneshot, not a real failure.
+acquire_lock "$QUARANTINE_REPO" "$QUARANTINE_ENV"
+
 # Mirrors bin/quarantine's own profile_services (not exposed by
 # lib/common.sh, so duplicated here rather than sourcing the whole CLI
 # file — that file unconditionally runs its own command dispatch at the
