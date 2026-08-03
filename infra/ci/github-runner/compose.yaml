@@ -29,6 +29,14 @@
 # (confirmed empirically against a live job run — see git history for this
 # line).
 #
+# /opt/quarantine/quarantine.yaml is a THIRD, separate mount for the same
+# DooD reason: it's a sibling of repo/, not under it, so mounting repo/
+# doesn't bring it along. `bin/quarantine` reads it via QUARANTINE_CONFIG_FILE
+# on every command (see load_config); without this mount every job fails
+# with "no config at /opt/quarantine/quarantine.yaml — run 'quarantine init'
+# first" even though that file exists right there on the host (confirmed
+# empirically against a live job run).
+#
 # EPHEMERAL=true + restart: always is the "sandbox" half of runner+sandbox:
 # deregisters and exits after one job, compose immediately starts a fresh,
 # clean-state container for the next one. No fixed container_name (unlike
@@ -70,3 +78,4 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - /srv/quarantine-runner-work:/srv/quarantine-runner-work
       - /opt/quarantine/repo:/opt/quarantine/repo
+      - /opt/quarantine/quarantine.yaml:/opt/quarantine/quarantine.yaml
