@@ -19,6 +19,16 @@
 # daemon (via the mounted socket), so a path that only exists inside this
 # container won't resolve on the host side.
 #
+# /opt/quarantine/repo is ALSO bind-mounted at an identical path, for a
+# related but distinct reason: DooD only gives this container the ABILITY
+# to talk to the host's Docker daemon — it does not share arbitrary host
+# directories into this container's own filesystem. The reusable workflows
+# (QuarantineAl/.github) `cd` into that exact path to git pull and run
+# `quarantine`/`docker compose` against the real platform checkout; without
+# this mount every job fails immediately with "No such file or directory"
+# (confirmed empirically against a live job run — see git history for this
+# line).
+#
 # EPHEMERAL=true + restart: always is the "sandbox" half of runner+sandbox:
 # deregisters and exits after one job, compose immediately starts a fresh,
 # clean-state container for the next one. No fixed container_name (unlike
@@ -59,3 +69,4 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /srv/quarantine-runner-work:/srv/quarantine-runner-work
+      - /opt/quarantine/repo:/opt/quarantine/repo
