@@ -66,11 +66,24 @@ env_file_path = ".env"
 # subcommand, so putting it in extra_args fails outright with "unknown
 # flag: --profile" (confirmed live). Compose profiles must be activated
 # via COMPOSE_PROFILES instead, which Compose reads directly from the
-# --env-file Komodo already writes — set `COMPOSE_PROFILES=gitops` (plus
-# `,<app-name>` per app once any are added to this environment's
-# manifest) inside the Stack's own Environment content in Komodo's UI,
-# not here. See docs/gitops-prod.md for why that content is currently a
-# manual paste rather than automated.
+# --env-file Komodo already writes — set it inside the Stack's own
+# Environment content in Komodo's UI, not here (manual for now; see
+# docs/gitops-prod.md for why).
+#
+# COMPOSE_PROFILES must NOT include "gitops": komodo-core/periphery/mongo
+# are gitops-profiled, and Periphery is what EXECUTES this deploy — a
+# routine deploy that includes its own profile can recreate the
+# container currently running it, killing the deploy mid-flight and
+# leaving everything else half up (confirmed live: Traefik/Postgres/
+# Zitadel/Mongo/Komodo-core all stuck "Created" but never started,
+# recovered only by manually re-running `docker compose up -d` from the
+# host). Same lesson as QUARANTINE_SKIP_RUNNER for the CI runner: the
+# delivery mechanism's own infra must never be part of what its own
+# automated reconciliation touches. komodo-core/periphery/mongo are
+# bootstrapped once via a direct `quarantine start` CLI run on the host
+# and are deliberately never reconciled by Komodo's own deploys —
+# COMPOSE_PROFILES should be "observability" (plus `,<app-name>` per app
+# once any are added to this environment's manifest), not "gitops".
 poll_for_updates = true
 auto_pull = true
 webhook_enabled = true
