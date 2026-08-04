@@ -25,3 +25,4 @@
 # this (omit entirely, or leave as `false`, for a plain CLI-managed
 # environment — the default and simplest mode).
 apps: []
+gitops: true
