@@ -17,7 +17,7 @@
 
 set -euo pipefail
 
-QUARANTINE_REPO_URL="${QUARANTINE_REPO_URL:-https://github.com/YOUR_ORG/quarantine.git}"
+QUARANTINE_REPO_URL="${QUARANTINE_REPO_URL:-https://github.com/QuarantineAl/platform.git}"
 QUARANTINE_INSTALL_DIR="${QUARANTINE_INSTALL_DIR:-/opt/quarantine/repo}"
 QUARANTINE_BIN_LINK="${QUARANTINE_BIN_LINK:-/usr/local/bin/quarantine}"
 
