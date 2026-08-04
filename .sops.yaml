@@ -48,7 +48,7 @@
 # ever actually be encrypted against these placeholder values.
 creation_rules:
   - path_regex: environments/dev/.*
-    age: age1CHANGEME000000000000000000000000000000000000000000dev0
+    age: age1lyg7jgdrknvldpyycz3wg0nz6v4t2c22ssd8gl6avs6yua7c2scqjstv7e
   - path_regex: environments/prod/.*
     age: age1tjkjlvl0cltyn2cufxf78uwm07p4nqeut0nvrw49spxpcjerpycsn94d45
   - path_regex: environments/test/.*
