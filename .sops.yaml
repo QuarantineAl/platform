@@ -50,6 +50,6 @@ creation_rules:
   - path_regex: environments/dev/.*
     age: age1CHANGEME000000000000000000000000000000000000000000dev0
   - path_regex: environments/prod/.*
-    age: age1CHANGEME000000000000000000000000000000000000000000prod
+    age: age1tjkjlvl0cltyn2cufxf78uwm07p4nqeut0nvrw49spxpcjerpycsn94d45
   - path_regex: environments/test/.*
     age: age1felrd3qz636vzm35jcvkd2r9atgvfp0u4fv3svx976xwc2d9ddeqeallqq
