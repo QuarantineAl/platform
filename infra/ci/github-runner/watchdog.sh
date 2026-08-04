@@ -81,10 +81,6 @@ done < <(qcompose "$QUARANTINE_ENV" config --services 2>/dev/null)
 
 add_profile observability
 
-if [[ "$(yq_get "$manifest" '.gitops')" == "true" ]]; then
-  add_profile gitops
-fi
-
 app_count="$(yq eval '.apps | length' "$manifest")"
 for (( i = 0; i < app_count; i++ )); do
   app_name="$(yq eval ".apps[$i].name" "$manifest")"

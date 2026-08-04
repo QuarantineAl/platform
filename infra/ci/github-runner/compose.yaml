@@ -1,12 +1,17 @@
 # infra/ci/github-runner/compose.yaml — one shared, ephemeral GitHub Actions
-# runner for ALL first-party apps' trusted CI. Never fork PRs — those stay
-# on GitHub-hosted runners (see docs/runners-and-sandboxing.md). Must be
-# included ONLY by environments/dev/compose.yaml, added by hand once that
-# environment exists (NOT via environments/_template/compose.yaml, which is
-# copied verbatim into every environment including a future prod — unlike
-# an ordinary catalog app, this service has docker.sock, i.e. root-
-# equivalent access to whatever host it runs on, and the prod include graph
-# must never reference it at all, not just fail to activate it).
+# runner pool per environment, for ALL that environment's first-party app
+# CI. Never fork PRs — those stay on GitHub-hosted runners (see
+# docs/runners-and-sandboxing.md). Added by hand to a given environment's
+# own compose.yaml once that environment exists (NOT via
+# environments/_template/compose.yaml, which is copied verbatim into every
+# environment including ones — e.g. a client install — that don't want a
+# runner at all): unlike an ordinary catalog app, this service has
+# docker.sock, i.e. root-equivalent access to whatever host it runs on.
+# dev's and prod's pools are entirely separate containers on entirely
+# separate hosts, distinguished by RUNNER_LABELS (quarantine-dev /
+# quarantine-prod, set per environment by generate_env_file in
+# bin/quarantine) — neither pool ever has access to the other
+# environment's Docker socket, age key, or secrets.
 #
 # Docker-outside-of-Docker (the HOST's socket, not a nested daemon): these
 # jobs exist to drive this host's own Docker daemon (quarantine app

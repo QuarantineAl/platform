@@ -1,0 +1,64 @@
+# apps/third-party/portainer/compose.yaml — portainer.${DOMAIN} (catalog.yaml: portainer)
+#
+# Internal container-management UI: start/stop/inspect containers, image
+# updates, per-container CPU/memory/network stats, host-level disk usage.
+# One instance per environment — dev and prod each get their own, never a
+# shared instance managing both, matching the isolation principle already
+# enforced everywhere else in this platform (decision 6: dev and prod
+# never share a Docker daemon).
+#
+# docker.sock mounted read-write: this is what actually lets it start/
+# stop/recreate containers, not just observe them — same root-equivalent
+# trust level infra/ci/github-runner/'s runner and infra/edge/traefik/'s
+# Traefik already have on this host.
+#
+# Local admin auth only for now: Portainer's first-login flow creates the
+# admin user interactively (no env var bootstraps a password
+# non-interactively the way KOMODO_INIT_ADMIN_PASSWORD used to), so set it
+# via Portainer's own UI on first visit — https://portainer.${DOMAIN},
+# within Portainer's own ~5-minute first-login window, or the instance
+# locks itself out of setup and needs a restart to reopen it. Portainer CE
+# does support pointing its login screen directly at a generic OIDC
+# provider (Settings -> Authentication -> OAuth -> Custom — confirmed
+# against docs.portainer.io, not BE-gated), which could front it with
+# Zitadel later the same way uptime-kuma's admin UI is fronted by
+# oauth2-proxy; deferred for now since this tool's current use (a small
+# number of trusted operators) doesn't need it yet.
+#
+# No healthcheck: this image is scratch-based with no shell and no
+# wget/curl (confirmed via `docker inspect` — Entrypoint is the bare
+# /portainer binary, Config.Healthcheck is null), so there's no CMD-SHELL
+# probe available to write, unlike uptime-kuma's image which ships its
+# own. Docker compose ps will show it as running (no health status), which
+# is fine — nothing in bin/quarantine wait_healthy()s a catalog app.
+#
+# PIN CHECKPOINT: portainer/portainer-ce:2.44.0 (STS track; verified
+# 2026-08-05 directly against Docker Hub's tags API and GitHub's releases
+# API — the LTS track, currently 2.39.5, is the other legitimate option if
+# longer-term stability matters more than newer features).
+
+services:
+  portainer:
+    image: portainer/portainer-ce:2.44.0
+    container_name: quarantine-portainer
+    restart: unless-stopped
+    profiles: [portainer]
+    command: ["-H", "unix:///var/run/docker.sock"]
+    networks:
+      - edge
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - portainer-data:/data
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.portainer.rule=Host(`portainer.${DOMAIN}`)
+      - traefik.http.routers.portainer.entrypoints=websecure
+      - traefik.http.routers.portainer.tls=true
+      - traefik.http.services.portainer.loadbalancer.server.port=9000
+
+networks:
+  edge:
+    external: true
+
+volumes:
+  portainer-data:
