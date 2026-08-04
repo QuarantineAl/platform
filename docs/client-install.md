@@ -68,13 +68,12 @@ for a non-standard layout:
 
 | Variable | Default | Overrides |
 |---|---|---|
-| `QUARANTINE_REPO_URL` | `https://github.com/YOUR_ORG/quarantine.git` (placeholder — this repo has no real remote yet) | Which repo gets cloned. **You must override this** until the real remote exists; set it on the `sudo ... bash` side of the pipe (see below), or edit the default in `install.sh` once the repo has a permanent home. |
+| `QUARANTINE_REPO_URL` | `https://github.com/QuarantineAl/platform.git` | Which repo gets cloned. Override only for testing against a fork or a non-standard layout. |
 | `QUARANTINE_INSTALL_DIR` | `/opt/quarantine/repo` | Where the repo is cloned. |
 | `QUARANTINE_BIN_LINK` | `/usr/local/bin/quarantine` | Where the CLI gets symlinked onto `PATH`. |
 
 ```bash
-curl -fsSL <raw-url-to-install.sh> | \
-  sudo QUARANTINE_REPO_URL=https://github.com/your-actual-org/quarantine.git bash
+curl -fsSL <raw-url-to-install.sh> | sudo bash
 ```
 
 The variable has to be attached to the `sudo ... bash` side of the pipe,
