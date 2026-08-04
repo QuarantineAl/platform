@@ -6,9 +6,8 @@ quarantine environment: install the CLI, run `init`, run `start`, verify
 it, and know what day-2 operations look like from here.
 
 This doc is operational, not architectural. For *why* the repo is laid out
-the way it is, see [`docs/architecture.md`](./architecture.md). For running
-an environment in GitOps mode (Komodo pull-deploying from this repo instead
-of you running `quarantine start` by hand) see `docs/gitops-prod.md`. For
+the way it is, see [`docs/architecture.md`](./architecture.md). For the CI
+runner and PR-sandbox model, see `docs/runners-and-sandboxing.md`. For
 adding a new third-party app to the catalog before you deploy it here, see
 `docs/adding-an-app.md`.
 
@@ -172,9 +171,9 @@ secrets-handling policy already covers credentials of this sensitivity.
 Why this matters as much as it does: this key is the *only* way to decrypt
 `environments/<env>/secrets.sops.yaml` — which holds every generated
 credential for that environment (Postgres admin password, Zitadel
-masterkey and admin password, Komodo secrets, the oauth2-proxy cookie
-secret, every app's OIDC client secret, and the Cloudflare API token
-itself). `secrets.sops.yaml` is safe to commit to git specifically *because*
+masterkey and admin password, the oauth2-proxy cookie secret, every app's
+OIDC client secret, and the Cloudflare API token itself).
+`secrets.sops.yaml` is safe to commit to git specifically *because*
 it's encrypted — but that safety is entirely contingent on the age private
 key living somewhere else, under your control. **There is no recovery
 mechanism if it's lost — none exists, none is planned.** Losing it means
@@ -274,12 +273,9 @@ What comes up, in this order, every run:
    always, regardless of catalog/manifest state. There's no explicit health
    wait after this step; give it a minute before expecting the SigNoz UI to
    respond.
-5. **Komodo (GitOps)** — brought up **only if** this environment's
-   `manifest.yaml` has a top-level `gitops: true` key. There's no CLI flag
-   for this yet; it's a hand-edit-the-manifest-then-`quarantine start`
-   toggle. See `docs/gitops-prod.md` for when you'd actually want this — a
-   brand-new environment with an empty manifest has nothing to gain from it
-   yet.
+5. **The CI runner pool**, if this environment's `compose.yaml` includes
+   `infra/ci/github-runner/` — added by hand per environment, never via
+   `_template/`. See `docs/runners-and-sandboxing.md`.
 6. **Every app in `manifest.yaml`** — for a fresh environment this list is
    empty (`apps: []` out of `_template`), so this step is a no-op until you
    run `quarantine app add`. Once apps exist, each one needing a database
@@ -318,8 +314,8 @@ quarantine status
 ```
 
 This runs `docker compose ps` across every profile this environment could
-have active — `observability`, `gitops`, and every name in `catalog.yaml` —
-so it's a full picture regardless of what's actually in the manifest.
+have active — `observability` and every name in `catalog.yaml` — so it's
+a full picture regardless of what's actually in the manifest.
 Everything from Step 3 should show as running/healthy.
 
 Then check the identity provider is actually reachable over TLS:
@@ -348,9 +344,8 @@ subcommands only mutate `environments/<env>/manifest.yaml` on disk; neither
 starts, stops, or commits anything by itself. Run `quarantine start` after
 either one to actually apply the change, and — since the CLI never commits
 or pushes — `git add`/`commit`/`push` the manifest change yourself
-afterward (both subcommands print this reminder). This matters more than
-it sounds: if this environment runs in GitOps mode (`docs/gitops-prod.md`),
-Komodo only sees a change once it's actually pushed.
+afterward (both subcommands print this reminder), so the repo stays an
+accurate record of what's actually running.
 
 ### Upgrading
 
@@ -385,8 +380,8 @@ an environment's data.
 |---|---|---|
 | The age private key (`/opt/quarantine/keys/age-<env>.txt`) | **Yes — this is the one that matters.** Offline, access-controlled, immediately after generation. | The only way to decrypt this environment's secrets. No recovery mechanism exists if it's lost — see [Step 2](#the-age-key-back-it-up-before-anything-else). |
 | `environments/<env>/secrets.sops.yaml` | Already safe — it's committed to git, encrypted. Nothing extra to do here. | SOPS ciphertext is meaningless without the age key above, by design. |
-| `environments/<env>/manifest.yaml`, `compose.yaml` | Already safe — committed to git, plaintext by design (Komodo/CLI read them without decrypting anything). | Not sensitive; desired-state config, not secrets. |
-| Each app's own data volumes (Postgres data, Zitadel/Komodo state, any app-specific volume) | Yes, if the app's data matters to you — this is genuinely outside what `quarantine` itself backs up. | `quarantine destroy` preserves volumes across a teardown/recreate, but that's not the same as an off-host backup surviving lost/corrupted disks. Back these up the way you'd back up any Docker volume — this repo doesn't prescribe a mechanism. |
+| `environments/<env>/manifest.yaml`, `compose.yaml` | Already safe — committed to git, plaintext by design (the CLI reads them without decrypting anything). | Not sensitive; desired-state config, not secrets. |
+| Each app's own data volumes (Postgres data, Zitadel state, any app-specific volume) | Yes, if the app's data matters to you — this is genuinely outside what `quarantine` itself backs up. | `quarantine destroy` preserves volumes across a teardown/recreate, but that's not the same as an off-host backup surviving lost/corrupted disks. Back these up the way you'd back up any Docker volume — this repo doesn't prescribe a mechanism. |
 
 Everything in the first column that isn't the age key is either already
 safe in git or explicitly out of scope for this CLI. The age key is the

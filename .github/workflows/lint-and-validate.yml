@@ -12,7 +12,7 @@
 #
 #   2. compose-validate — `docker compose config` against
 #      environments/_template/compose.yaml with every profile flag
-#      (observability, gitops, uptime-kuma), to structurally validate the
+#      (observability, uptime-kuma, portainer), to structurally validate the
 #      assembled compose graph (include: resolution, var interpolation,
 #      profile gating) parses and merges cleanly. This needs *some* value
 #      for every ${VAR} the included fragments reference — those vars only
@@ -99,15 +99,9 @@ jobs:
           OIDC_CLIENT_ID_UPTIME_KUMA=dummy-oidc-client-id
           OIDC_CLIENT_SECRET_UPTIME_KUMA=dummy-oidc-client-secret
           OAUTH2_PROXY_COOKIE_SECRET=dummy-cookie-secret-value
-          KOMODO_DATABASE_USERNAME=komodo
-          KOMODO_DATABASE_PASSWORD=dummy-komodo-database-password
-          KOMODO_ADMIN_USERNAME=admin
-          KOMODO_ADMIN_PASSWORD=dummy-komodo-admin-password
-          KOMODO_JWT_SECRET=dummy-komodo-jwt-secret
-          KOMODO_WEBHOOK_SECRET=dummy-komodo-webhook-secret
           EOF
 
-      - name: docker compose config (observability + gitops + uptime-kuma profiles)
+      - name: docker compose config (observability + uptime-kuma + portainer profiles)
         shell: bash
         working-directory: environments/_template
         run: |
@@ -115,7 +109,7 @@ jobs:
           docker compose \
             --env-file /tmp/quarantine-ci.env \
             --profile observability \
-            --profile gitops \
             --profile uptime-kuma \
+            --profile portainer \
             -f compose.yaml \
             config
