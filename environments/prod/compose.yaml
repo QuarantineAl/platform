@@ -39,6 +39,10 @@ include:
   - path: ../../infra/observability/otel-collector/compose.yaml
   - path: ../../infra/observability/signoz/compose.yaml
 
+  # --- infra/ci: self-hosted Actions runner pool for this environment
+  # (RUNNER_LABELS=self-hosted,quarantine-prod) -----------------------------
+  - path: ../../infra/ci/github-runner/compose.yaml
+
   # --- apps/first-party: profile-gated, one profile per catalog.yaml entry
   - path: ../../apps/first-party/lazaretto/compose.yaml
 

@@ -26,6 +26,27 @@
 #                 docs/adding-an-app.md.
 
 apps:
+  - name: lazaretto
+    kind: app
+    compose_path: apps/first-party/lazaretto/compose.yaml
+    subdomain: lazaretto
+    needs_db: false
+    needs_oidc: false
+    notes: >-
+      Two-origin app: frontend at ${subdomain}.${DOMAIN}, backend/API at
+      ${subdomain}-api.${DOMAIN} — the second hostname is hardcoded in the
+      compose fragment (SUBDOMAIN-templated), not derived from this one
+      subdomain field. The frontend image has its API URL baked in at CI
+      build time (Vite loads frontend/.env.production, not a build ARG —
+      see that file's own Dockerfile comment), pointed at this
+      environment's -api hostname by the calling CI workflow. No native
+      auth (own SQLite, own ARCHITECTURE.md-documented "no auth" gap) —
+      flip needs_oidc to true + front it with oauth2-proxy later, same
+      pattern as uptime-kuma, no lazaretto-side change needed. The same
+      compose fragment is reused for PR sandboxes (pr-<n>-lazaretto),
+      invoked directly rather than via quarantine app add — see
+      docs/runners-and-sandboxing.md.
+
   - name: uptime-kuma
     kind: app
     compose_path: apps/third-party/uptime-kuma/compose.yaml
@@ -41,3 +62,20 @@ apps:
       status-page paths stay unauthenticated on the same host. Monitors run
       from inside this host only — an external uptime probe is a separate,
       out-of-scope concern (see docs/architecture.md).
+
+  - name: portainer
+    kind: app
+    compose_path: apps/third-party/portainer/compose.yaml
+    subdomain: portainer
+    needs_db: false
+    needs_oidc: false
+    notes: >-
+      Internal container-management UI (start/stop, CPU/memory/disk/network
+      stats, image updates) — added to both dev and prod, one instance per
+      environment, never shared. Local admin auth for now, set via
+      Portainer's own first-login UI (no env var bootstraps a password the
+      way Komodo's did); Portainer CE does support pointing its login
+      screen at a generic OIDC provider directly (no oauth2-proxy needed),
+      which could front it with Zitadel later by flipping needs_oidc to
+      true — deferred since the current small number of trusted operators
+      doesn't need it yet.

@@ -1,0 +1,84 @@
+# infra/ci/github-runner/compose.yaml — one shared, ephemeral GitHub Actions
+# runner pool per environment, for ALL that environment's first-party app
+# CI. Never fork PRs — those stay on GitHub-hosted runners (see
+# docs/runners-and-sandboxing.md). Added by hand to a given environment's
+# own compose.yaml once that environment exists (NOT via
+# environments/_template/compose.yaml, which is copied verbatim into every
+# environment including ones — e.g. a client install — that don't want a
+# runner at all): unlike an ordinary catalog app, this service has
+# docker.sock, i.e. root-equivalent access to whatever host it runs on.
+# dev's and prod's pools are entirely separate containers on entirely
+# separate hosts, distinguished by RUNNER_LABELS (quarantine-dev /
+# quarantine-prod, set per environment by generate_env_file in
+# bin/quarantine) — neither pool ever has access to the other
+# environment's Docker socket, age key, or secrets.
+#
+# Docker-outside-of-Docker (the HOST's socket, not a nested daemon): these
+# jobs exist to drive this host's own Docker daemon (quarantine app
+# add/start, docker compose -p pr-<n>-<app> ...) — a nested DinD daemon
+# would fight that goal for no isolation benefit against trusted,
+# first-party-only code.
+#
+# RUNNER_WORKDIR is bind-mounted at an IDENTICAL path on host and
+# container: a job's own `docker run -v ...` is executed by the HOST
+# daemon (via the mounted socket), so a path that only exists inside this
+# container won't resolve on the host side.
+#
+# /opt/quarantine (the whole directory, not just repo/) is ALSO bind-mounted
+# at an identical path, for a related but distinct reason: DooD only gives
+# this container the ABILITY to talk to the host's Docker daemon — it does
+# not share arbitrary host directories into this container's own filesystem.
+# The reusable workflows (QuarantineAl/.github) `cd` into
+# /opt/quarantine/repo to git pull and run `quarantine`/`docker compose`
+# against the real platform checkout, and `bin/quarantine` itself also reads
+# host-only siblings of repo/ that live outside git on purpose:
+# quarantine.yaml (QUARANTINE_CONFIG_FILE, see load_config) and
+# keys/age-<env>.txt (QUARANTINE_KEYS_DIR, see lib/common.sh's age_key_path —
+# deliberately never committed). Mounting repo/ or quarantine.yaml alone
+# missed the others each time and failed immediately with "No such file or
+# directory" / "no config at ..." / "age key not found ..." (confirmed
+# empirically across three separate live job runs — see git history for
+# this line); mounting the parent directory once covers all current and
+# future host-local state quarantine keeps there.
+#
+# EPHEMERAL=true + restart: always is the "sandbox" half of runner+sandbox:
+# deregisters and exits after one job, compose immediately starts a fresh,
+# clean-state container for the next one. No fixed container_name (unlike
+# every other service in this repo) so concurrency can scale later with
+# `docker compose up -d --scale runner=N` without a name collision.
+#
+# Defaults below target the real org-level pool described in
+# docs/runners-and-sandboxing.md (RUNNER_SCOPE=org, a durable PAT via
+# GH_RUNNER_PAT — see environments/_template/secrets.example.yaml's
+# core.github_runner.pat, wired through generate_env_file in
+# bin/quarantine). Every var is override-able via the environment so a
+# one-off manual test (e.g. a short-lived, repo-scoped registration token)
+# can run this exact file unmodified:
+#   RUNNER_SCOPE=repo REPO_URL=https://github.com/QuarantineAl/lazaretto \
+#     RUNNER_TOKEN=<token> docker compose -f infra/ci/github-runner/compose.yaml up -d
+#
+# PIN CHECKPOINT: myoung34/github-runner:latest — env vars (ACCESS_TOKEN vs
+# RUNNER_TOKEN, RUNNER_SCOPE/ORG_NAME/REPO_URL branching, EPHEMERAL,
+# RUNNER_WORKDIR default) confirmed against that image's own /entrypoint.sh
+# on 2026-08-03. No version pin yet — this image has no tagged releases at
+# the time of writing; revisit once it does.
+
+services:
+  runner:
+    image: myoung34/github-runner:latest
+    restart: always
+    environment:
+      RUNNER_SCOPE: ${RUNNER_SCOPE:-org}
+      ORG_NAME: ${ORG_NAME:-QuarantineAl}
+      REPO_URL: ${REPO_URL:-}
+      ACCESS_TOKEN: ${GH_RUNNER_PAT:-}
+      RUNNER_TOKEN: ${RUNNER_TOKEN:-}
+      RUNNER_GROUP: ${RUNNER_GROUP:-first-party}
+      LABELS: ${RUNNER_LABELS:-self-hosted,quarantine-dev}
+      RUNNER_WORKDIR: /srv/quarantine-runner-work
+      EPHEMERAL: "true"
+      DISABLE_AUTO_UPDATE: "true"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /srv/quarantine-runner-work:/srv/quarantine-runner-work
+      - /opt/quarantine:/opt/quarantine
