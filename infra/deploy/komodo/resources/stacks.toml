@@ -60,11 +60,17 @@ branch = "main"
 run_directory = "environments/prod"
 file_paths = ["compose.yaml"]
 env_file_path = ".env"
-# Populated by `quarantine start` from environments/prod/manifest.yaml at
-# the time GitOps mode is enabled; edit the manifest and re-run
-# `quarantine start` to change which profiles are active here, rather than
-# hand-editing this list (it's regenerated, not merged).
-extra_args = ["--profile", "gitops"]
+# NOT extra_args: Komodo always builds the deploy command as
+# `docker compose up -d [EXTRA_ARGS]` (confirmed against its own source) —
+# --profile is a global Compose flag that only works BEFORE the
+# subcommand, so putting it in extra_args fails outright with "unknown
+# flag: --profile" (confirmed live). Compose profiles must be activated
+# via COMPOSE_PROFILES instead, which Compose reads directly from the
+# --env-file Komodo already writes — set `COMPOSE_PROFILES=gitops` (plus
+# `,<app-name>` per app once any are added to this environment's
+# manifest) inside the Stack's own Environment content in Komodo's UI,
+# not here. See docs/gitops-prod.md for why that content is currently a
+# manual paste rather than automated.
 poll_for_updates = true
 auto_pull = true
 webhook_enabled = true
