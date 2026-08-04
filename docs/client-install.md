@@ -67,12 +67,13 @@ for a non-standard layout:
 
 | Variable | Default | Overrides |
 |---|---|---|
-| `QUARANTINE_REPO_URL` | `https://github.com/QuarantineAl/platform.git` | Which repo gets cloned. Override only for testing against a fork or a non-standard layout. |
+| `QUARANTINE_REPO_URL` | `https://github.com/QuarantineAl/platform.git` | Which repo gets cloned. Override only for a fork or private mirror — set it on the `sudo ... bash` side of the pipe (see below). |
 | `QUARANTINE_INSTALL_DIR` | `/opt/quarantine/repo` | Where the repo is cloned. |
 | `QUARANTINE_BIN_LINK` | `/usr/local/bin/quarantine` | Where the CLI gets symlinked onto `PATH`. |
 
 ```bash
-curl -fsSL <raw-url-to-install.sh> | sudo bash
+curl -fsSL <raw-url-to-install.sh> | \
+  sudo QUARANTINE_REPO_URL=https://github.com/your-fork/platform.git bash
 ```
 
 The variable has to be attached to the `sudo ... bash` side of the pipe,
@@ -80,7 +81,7 @@ not exported before `curl` — `curl` never reads it, and `sudo` resets the
 environment by default (it doesn't inherit whatever was exported in the
 calling shell), so `install.sh`'s own `${QUARANTINE_REPO_URL:-...}`
 expansion — which runs inside the `bash` process `sudo` execs — would
-still see the placeholder otherwise.
+still see the default otherwise.
 
 **Stay root (or use `sudo`) for every `quarantine` command from here on.**
 `install.sh` creates `/opt/quarantine/repo` as root, and `quarantine init`
@@ -347,18 +348,32 @@ or pushes — `git add`/`commit`/`push` the manifest change yourself
 afterward (both subcommands print this reminder), so the repo stays an
 accurate record of what's actually running.
 
+### Checking the version
+
+```bash
+quarantine version
+```
+
+Prints `git describe --tags --dirty --always` for the repo checkout on
+disk — a bare commit SHA today (this repo has no tagged releases yet), a
+real `vX.Y.Z`-style string once tagged releases start landing, and a
+`-dirty` suffix if the checkout has uncommitted local changes (which
+should never happen on a real deploy host).
+
 ### Upgrading
 
 ```bash
 quarantine upgrade
 ```
 
-`git pull --ff-only`s the configured repo, then re-execs `quarantine
-start`. It first asserts the repo path recorded in
-`/opt/quarantine/quarantine.yaml` and the CLI's own on-disk location
-resolve to the same checkout — if they've diverged (a hand-edited
-`quarantine.yaml`, a relocated checkout), it dies with a clear error
-instead of pulling code it then never actually runs.
+Requires the repo to currently be on branch `main` — dies with a clear
+error otherwise, rather than silently fast-forwarding whatever branch is
+actually checked out. Then fetches and fast-forward-only merges
+`origin/main`, and re-execs `quarantine start`. It first asserts the repo
+path recorded in `/opt/quarantine/quarantine.yaml` and the CLI's own
+on-disk location resolve to the same checkout — if they've diverged (a
+hand-edited `quarantine.yaml`, a relocated checkout), it dies with a clear
+error instead of pulling code it then never actually runs.
 
 ### Destroying
 
