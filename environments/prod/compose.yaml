@@ -1,0 +1,51 @@
+# environments/_template/compose.yaml
+#
+# Assembles one environment from infra/ + apps/ via Compose `include:`.
+# This file is copied VERBATIM into every new environment by `quarantine
+# init` — nothing in it is environment-specific. All per-environment
+# variability lives in the sibling manifest.yaml (which apps/versions are
+# active) and secrets.sops.yaml (credentials), surfaced through the
+# --env-file that `quarantine start` generates before every compose
+# invocation (see qcompose() in lib/common.sh).
+#
+# Third-party apps are included unconditionally but gated at runtime by
+# Compose profiles: every service in apps/third-party/<app>/compose.yaml
+# carries `profiles: [<app-name>]` matching its catalog.yaml name, and
+# `quarantine start` passes `--profile <name>` once per app listed in this
+# environment's manifest.yaml. An app not in the manifest is present in the
+# assembled config but never started.
+#
+# Observability (infra/observability/) is likewise profile-gated behind
+# `observability`, but is meant to be on by default: `quarantine start`
+# passes `--profile observability` unconditionally so the active service set
+# matches what ran before it was profile-gated. See docs/architecture.md.
+
+include:
+  # --- infra/edge: always on ----------------------------------------------
+  - path: ../../infra/edge/traefik/compose.yaml
+  # oauth2-proxy is profile-gated (see infra/edge/oauth2-proxy/compose.yaml)
+  # — only starts today when uptime-kuma is in the manifest.
+  - path: ../../infra/edge/oauth2-proxy/compose.yaml
+
+  # --- infra/identity: always on ------------------------------------------
+  - path: ../../infra/identity/zitadel/compose.yaml
+
+  # --- infra/data: postgres always on; redis profile-gated ----------------
+  - path: ../../infra/data/postgres/compose.yaml
+  - path: ../../infra/data/redis/compose.yaml
+
+  # --- infra/observability: profile-gated behind `observability`, on by
+  # default (see the COMPOSE_PROFILES note above) --------------------------
+  - path: ../../infra/observability/otel-collector/compose.yaml
+  - path: ../../infra/observability/signoz/compose.yaml
+
+  # --- infra/ci: self-hosted Actions runner pool for this environment
+  # (RUNNER_LABELS=self-hosted,quarantine-prod) -----------------------------
+  - path: ../../infra/ci/github-runner/compose.yaml
+
+  # --- apps/first-party: profile-gated, one profile per catalog.yaml entry
+  - path: ../../apps/first-party/lazaretto/compose.yaml
+
+  # --- apps/third-party: profile-gated, one profile per catalog.yaml entry
+  - path: ../../apps/third-party/uptime-kuma/compose.yaml
+  - path: ../../apps/third-party/portainer/compose.yaml

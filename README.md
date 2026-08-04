@@ -103,12 +103,8 @@ are in the manifest:
 | SigNoz + otel-collector | Observability | always on — `quarantine start` passes `--profile observability` unconditionally |
 | oauth2-proxy | Forward-auth sidecar | present in every environment, but does nothing until a catalog app that needs it (e.g. uptime-kuma) is in the manifest |
 
-Two things that are *not* part of that default set:
+One thing that is *not* part of that default set:
 
-- **Komodo (GitOps) + its MongoDB backend** come up only if the
-  environment's `manifest.yaml` has a top-level `gitops: true` key. There
-  is no CLI flag for this yet — it's a hand-edit-the-manifest-then-
-  `quarantine start` toggle. See [GitOps](#gitops) below.
 - **Redis/Valkey** exists in `infra/data/redis/` and is provisioned ahead
   of need for future first-party apps, but has no consumer yet and isn't
   brought up by `quarantine start` today.
@@ -116,11 +112,12 @@ Two things that are *not* part of that default set:
 ## The app catalog
 
 `catalog.yaml` is the registry of every app `quarantine app add` knows
-how to deploy. Today it holds exactly one entry: **uptime-kuma**
-(subdomain `status`, no database, OIDC-fronted). Uptime Kuma itself has
-no native OIDC support, so the OIDC client this entry provisions is
-actually consumed by an oauth2-proxy forward-auth sidecar in front of it,
-not by Uptime Kuma directly — public status-page paths stay
+how to deploy. Today it holds **lazaretto** (first-party), **uptime-kuma**
+(subdomain `status`, no database, OIDC-fronted), and **portainer**
+(internal container management, one instance per environment). Uptime
+Kuma itself has no native OIDC support, so the OIDC client its entry
+provisions is actually consumed by an oauth2-proxy forward-auth sidecar in
+front of it, not by Uptime Kuma directly — public status-page paths stay
 unauthenticated, only the admin UI is protected.
 
 ```bash
@@ -130,10 +127,8 @@ quarantine app remove uptime-kuma
 
 Both commands only edit `environments/<env>/manifest.yaml` on local
 disk — they never run `git add`/`commit`/`push` themselves, and they'll
-remind you of that every time. If the environment runs in GitOps mode
-(see below), nothing actually deploys until you commit and push that
-change yourself, or Komodo picks it up. Run `quarantine start` afterwards
-to reconcile the running containers to match.
+remind you of that every time. Run `quarantine start` afterwards to
+reconcile the running containers to match.
 
 Adding a *new* app to the catalog (not just adding an existing catalog
 entry to an environment) is a separate, manual process — see
@@ -151,7 +146,7 @@ like them.
 | `quarantine start` | Idempotent reconcile: brings this environment's desired state (core infra + manifest apps) up. |
 | `quarantine app add <name> [--version V]` | Adds an app from `catalog.yaml` to this environment's manifest. |
 | `quarantine app remove <name>` | Removes an app from this environment's manifest. |
-| `quarantine status` | Shows `docker compose ps` across every profile — observability, gitops, and every catalog app. |
+| `quarantine status` | Shows `docker compose ps` across every profile — observability and every catalog app. |
 | `quarantine version` | Prints the version of the repo checkout on disk (`git describe --tags --dirty --always` — a bare commit SHA today, since no tags exist yet; a real `vX.Y.Z` once tagged releases start). |
 | `quarantine upgrade` | Requires the repo to be on branch `main`, fetches and fast-forward-only merges `origin/main`, then re-execs `quarantine start`. |
 | `quarantine destroy` | Requires typing the exact environment name to confirm, then `docker compose down` across every profile. Volumes are explicitly preserved — this is not `-v`. |
@@ -164,18 +159,10 @@ touching anything, so two concurrent invocations against the same
 environment can't race and corrupt `manifest.yaml` or
 `secrets.sops.yaml`.
 
-## GitOps
-
-By default, an environment is managed directly by whoever runs
-`quarantine app add`/`start` on the host. Setting `gitops: true` at the
-top of `environments/<env>/manifest.yaml` switches on Komodo instead: it
-watches this repo's `environments/<env>/` directory (manifest, compose,
-encrypted secrets) and pull-deploys whatever is actually committed and
-pushed — not whatever's sitting uncommitted on the host. There's no CLI
-flag for enabling this; it's a hand-edit, then `quarantine start` to
-bring Komodo up. `prod` is meant to run this way — pull-only, no direct
-CLI-driven mutation against it. See `docs/gitops-prod.md` for the full
-reasoning.
+Every environment (dev and prod alike) is managed directly by whoever
+runs `quarantine app add`/`start` on the host, plus this org's own
+self-hosted CI runner for app deploys triggered from GitHub — see
+`docs/runners-and-sandboxing.md` for that model.
 
 ## Learn more
 
@@ -186,5 +173,5 @@ reasoning.
 - [`docs/client-install.md`](docs/client-install.md) — the full walkthrough
   for standing up a brand-new environment on a fresh host, from
   `install.sh` through day-2 operations.
-- [`docs/gitops-prod.md`](docs/gitops-prod.md) — when and why to run an
-  environment in GitOps mode.
+- [`docs/runners-and-sandboxing.md`](docs/runners-and-sandboxing.md) — the
+  CI runner and PR-sandbox model for both dev and prod.

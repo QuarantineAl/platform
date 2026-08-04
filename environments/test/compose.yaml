@@ -15,17 +15,10 @@
 # environment's manifest.yaml. An app not in the manifest is present in the
 # assembled config but never started.
 #
-# Komodo is core infrastructure but optional: CLI-mode environments (dev,
-# client installs) can skip it entirely via the `gitops` profile — see
-# docs/gitops-prod.md for when it's required (GitOps/prod mode).
-#
 # Observability (infra/observability/) is likewise profile-gated behind
-# `observability`, but is meant to be on by default: `quarantine init`
-# must default this environment's COMPOSE_PROFILES to include
-# `observability` (and `gitops` once GitOps mode is enabled) so the active
-# service set matches what ran before these two were profile-gated. This
-# can't be verified against a real .env until `quarantine init` exists —
-# see docs/architecture.md.
+# `observability`, but is meant to be on by default: `quarantine start`
+# passes `--profile observability` unconditionally so the active service set
+# matches what ran before it was profile-gated. See docs/architecture.md.
 
 include:
   # --- infra/edge: always on ----------------------------------------------
@@ -37,9 +30,8 @@ include:
   # --- infra/identity: always on ------------------------------------------
   - path: ../../infra/identity/zitadel/compose.yaml
 
-  # --- infra/data: postgres always on; mongo/redis profile-gated ---------
+  # --- infra/data: postgres always on; redis profile-gated ----------------
   - path: ../../infra/data/postgres/compose.yaml
-  - path: ../../infra/data/mongo/compose.yaml
   - path: ../../infra/data/redis/compose.yaml
 
   # --- infra/observability: profile-gated behind `observability`, on by
@@ -47,9 +39,6 @@ include:
   - path: ../../infra/observability/otel-collector/compose.yaml
   - path: ../../infra/observability/signoz/compose.yaml
 
-  # --- infra/deploy: optional, profile-gated behind `gitops` (see
-  # infra/deploy/komodo/) --------------------------------------------------
-  - path: ../../infra/deploy/komodo/compose.yaml
-
   # --- apps/third-party: profile-gated, one profile per catalog.yaml entry
   - path: ../../apps/third-party/uptime-kuma/compose.yaml
+  - path: ../../apps/third-party/portainer/compose.yaml

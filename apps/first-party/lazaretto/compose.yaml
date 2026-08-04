@@ -1,0 +1,82 @@
+# apps/first-party/lazaretto/compose.yaml — ${SUBDOMAIN:-lazaretto}.${DOMAIN}
+# (catalog.yaml: lazaretto)
+#
+# Two services, two hostnames — mirrors the frontend/-api split lazaretto's
+# own DOCKER.md documents for its manual deployment. VITE_API_BASE is baked
+# into the frontend image at CI build time by rewriting
+# frontend/.env.production before `docker build` (lazaretto/frontend/
+# Dockerfile deliberately reads only that file, never a build ARG/ENV — an
+# already-set process.env value, even empty, would silently win over it) —
+# that rewrite is the calling CI workflow's job, not this fragment's.
+#
+# SUBDOMAIN defaults to "lazaretto" for the persistent catalog deployment
+# (quarantine app add lazaretto / quarantine start) but is overridden per
+# invocation for a PR sandbox (pr-<n>-lazaretto), so this ONE fragment
+# serves both — see docs/runners-and-sandboxing.md's per-PR section. The
+# `profiles: [lazaretto]` gate is a STATIC app-identity label (matches
+# catalog.yaml's name, independent of which SUBDOMAIN a given invocation
+# uses) — any invocation of this file, catalog or PR sandbox, must pass
+# `--profile lazaretto` or these services never start.
+#
+# No database (own SQLite volume, catalog.yaml: needs_db: false). No
+# native auth (catalog.yaml: needs_oidc: false for now — see lazaretto's
+# own ARCHITECTURE.md "no auth" gap; flip needs_oidc later + front it with
+# oauth2-proxy, same pattern as uptime-kuma, no lazaretto-side change
+# needed).
+
+services:
+  lazaretto-backend:
+    image: ghcr.io/quarantineal/lazaretto-backend:${LAZARETTO_VERSION:-CHANGEME}
+    container_name: quarantine-${SUBDOMAIN:-lazaretto}-backend
+    restart: unless-stopped
+    profiles: [lazaretto]
+    networks:
+      - edge
+    volumes:
+      - lazaretto-data:/app/data
+    environment:
+      FRONTEND_ORIGIN: https://${SUBDOMAIN:-lazaretto}.${DOMAIN}
+    healthcheck:
+      # 127.0.0.1, not localhost: this image's /etc/hosts resolves
+      # "localhost" to ::1 as well as 127.0.0.1, and wget tries that first —
+      # Node's HOST=0.0.0.0 binds IPv4 only, so the IPv6 attempt gets
+      # "Connection refused" even though the app is perfectly healthy on
+      # IPv4 (confirmed empirically: a real PR-sandbox test reported
+      # unhealthy while curl from another container succeeded the whole
+      # time — see git history for this line).
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3031/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    labels:
+      - traefik.enable=true
+      - traefik.http.services.${SUBDOMAIN:-lazaretto}-backend.loadbalancer.server.port=3031
+      - traefik.http.routers.${SUBDOMAIN:-lazaretto}-api.rule=Host(`${SUBDOMAIN:-lazaretto}-api.${DOMAIN}`)
+      - traefik.http.routers.${SUBDOMAIN:-lazaretto}-api.entrypoints=websecure
+      - traefik.http.routers.${SUBDOMAIN:-lazaretto}-api.tls=true
+      - traefik.http.routers.${SUBDOMAIN:-lazaretto}-api.service=${SUBDOMAIN:-lazaretto}-backend
+
+  lazaretto-frontend:
+    image: ghcr.io/quarantineal/lazaretto-frontend:${LAZARETTO_VERSION:-CHANGEME}
+    container_name: quarantine-${SUBDOMAIN:-lazaretto}-frontend
+    restart: unless-stopped
+    profiles: [lazaretto]
+    depends_on:
+      - lazaretto-backend
+    networks:
+      - edge
+    labels:
+      - traefik.enable=true
+      - traefik.http.services.${SUBDOMAIN:-lazaretto}-frontend.loadbalancer.server.port=80
+      - traefik.http.routers.${SUBDOMAIN:-lazaretto}.rule=Host(`${SUBDOMAIN:-lazaretto}.${DOMAIN}`)
+      - traefik.http.routers.${SUBDOMAIN:-lazaretto}.entrypoints=websecure
+      - traefik.http.routers.${SUBDOMAIN:-lazaretto}.tls=true
+      - traefik.http.routers.${SUBDOMAIN:-lazaretto}.service=${SUBDOMAIN:-lazaretto}-frontend
+
+networks:
+  edge:
+    external: true
+
+volumes:
+  lazaretto-data:
