@@ -160,7 +160,7 @@ kind of secret the app needs:
   Zitadel** (its own admin password, an API token, an encryption key it
   generates nowhere else) — there is no provisioner for this, so it has to
   be generated up front, at `quarantine init` time, the same way
-  `core.oauth2_proxy.cookie_secret` and the `core.komodo.*` keys are:
+  `core.oauth2_proxy.cookie_secret` is:
   1. Add the key under `apps:` in
      `environments/_template/secrets.example.yaml` (placeholder value:
      `"CHANGEME-generated-at-init"`).
@@ -171,8 +171,8 @@ kind of secret the app needs:
      missing it.
   3. Add a `req_secret` call for it inside `generate_env_file()`, and a
      `printf` line writing the resulting env var into the generated `.env`
-     — following the existing `komodo_*`/`oauth2_cookie_secret` calls right
-     above it in that function.
+     — following the existing `oauth2_cookie_secret` call right above it in
+     that function.
 
 If the app needs none of the above (no DB, no OIDC, no bespoke secret), skip
 this step entirely — that's exactly Uptime Kuma's `needs_db: false` case,
@@ -210,7 +210,7 @@ quarantine status
 - `quarantine app add` validates `<name>` against `catalog.yaml` and adds it
   to `environments/<env>/manifest.yaml`. It — like `app remove` — never
   commits or pushes; it prints a reminder that you're responsible for `git
-  add`/`commit`/`push`ing the manifest for GitOps sync.
+  add`/`commit`/`push`ing the manifest yourself.
 - `quarantine start` is an idempotent reconcile: it brings up core infra
   (unconditionally), runs `provisioners/postgres.sh`/`provisioners/zitadel.sh`
   for this app if its `needs_db`/`needs_oidc` flags are set, then starts it

@@ -36,8 +36,8 @@
 # transiently; see the CI check in .github/workflows/ and the guard
 # patterns in .gitignore.
 #
-# manifest.yaml and compose.yaml are plain YAML on purpose (Komodo and the
-# CLI read them without decrypting anything); in practice only
+# manifest.yaml and compose.yaml are plain YAML on purpose (the CLI reads
+# them without decrypting anything); in practice only
 # secrets.sops.yaml is ever actually run through `sops`, even though the
 # path_regex below matches the whole environment directory.
 #
