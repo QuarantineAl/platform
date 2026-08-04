@@ -33,16 +33,16 @@ Three commands: install, init, start.
 symlinks `bin/quarantine` onto `PATH`.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/YOUR_ORG/quarantine/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/QuarantineAl/platform/main/install.sh | sudo bash
 ```
 
-This repo has no real remote yet (`YOUR_ORG` above is a literal
-placeholder). Once it has a home, either edit the default in `install.sh`
-or override it at install time:
+`QUARANTINE_REPO_URL` defaults to this repo
+(`https://github.com/QuarantineAl/platform.git`) — override it only if
+you're installing from a fork or a private mirror:
 
 ```bash
 curl -fsSL <raw-url-to-install.sh> | \
-  sudo QUARANTINE_REPO_URL=https://github.com/your-actual-org/quarantine.git bash
+  sudo QUARANTINE_REPO_URL=https://github.com/your-fork/platform.git bash
 ```
 
 The env var has to go on the `sudo ... bash` side of the pipe, not before
@@ -112,11 +112,12 @@ One thing that is *not* part of that default set:
 ## The app catalog
 
 `catalog.yaml` is the registry of every app `quarantine app add` knows
-how to deploy. Today it holds exactly one entry: **uptime-kuma**
-(subdomain `status`, no database, OIDC-fronted). Uptime Kuma itself has
-no native OIDC support, so the OIDC client this entry provisions is
-actually consumed by an oauth2-proxy forward-auth sidecar in front of it,
-not by Uptime Kuma directly — public status-page paths stay
+how to deploy. Today it holds **lazaretto** (first-party), **uptime-kuma**
+(subdomain `status`, no database, OIDC-fronted), and **portainer**
+(internal container management, one instance per environment). Uptime
+Kuma itself has no native OIDC support, so the OIDC client its entry
+provisions is actually consumed by an oauth2-proxy forward-auth sidecar in
+front of it, not by Uptime Kuma directly — public status-page paths stay
 unauthenticated, only the admin UI is protected.
 
 ```bash
@@ -146,7 +147,8 @@ like them.
 | `quarantine app add <name> [--version V]` | Adds an app from `catalog.yaml` to this environment's manifest. |
 | `quarantine app remove <name>` | Removes an app from this environment's manifest. |
 | `quarantine status` | Shows `docker compose ps` across every profile — observability and every catalog app. |
-| `quarantine upgrade` | `git pull --ff-only` in the configured repo, then re-execs `quarantine start`. |
+| `quarantine version` | Prints the version of the repo checkout on disk (`git describe --tags --dirty --always` — a bare commit SHA today, since no tags exist yet; a real `vX.Y.Z` once tagged releases start). |
+| `quarantine upgrade` | Requires the repo to be on branch `main`, fetches and fast-forward-only merges `origin/main`, then re-execs `quarantine start`. |
 | `quarantine destroy` | Requires typing the exact environment name to confirm, then `docker compose down` across every profile. Volumes are explicitly preserved — this is not `-v`. |
 
 Run `quarantine init --help` for init's own full flag reference.
