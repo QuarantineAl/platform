@@ -21,15 +21,12 @@ quarantine/
 │   │   └── zitadel/                 # OIDC identity provider (API + Login v2 UI)
 │   ├── data/
 │   │   ├── postgres/                # shared Postgres — one database + role per consumer
-│   │   ├── mongo/                   # shared MongoDB — currently Komodo's only consumer
 │   │   └── redis/                   # shared Valkey/Redis — no consumer yet, provisioned ahead of need
 │   ├── observability/                # compose profile: "observability" (on by default)
 │   │   ├── otel-collector/           # OTLP ingestion
 │   │   └── signoz/                   # SigNoz UI/API + its ClickHouse telemetry store
-│   └── deploy/
-│       └── komodo/                   # GitOps continuous deployment (compose profile: "gitops")
-│           ├── compose.yaml
-│           └── resources/            # Komodo's own Server/Stack definitions, as TOML
+│   └── ci/
+│       └── github-runner/            # self-hosted Actions runner pool, one per environment
 │
 ├── apps/
 │   ├── third-party/                 # compose + config only, never source
@@ -90,42 +87,37 @@ never more than two levels deep:
   `postgres:17.10-alpine`, see the pin note in
   `infra/data/postgres/compose.yaml` for why an earlier Immich-specific
   vector-extension fork was reverted when Immich was deferred out of the
-  initial catalog), MongoDB (currently Komodo's backend only), Redis/Valkey
-  (no consumer yet, provisioned ahead of need for first-party apps).
-  Deliberately excludes datastores that are tightly coupled to a single
-  consumer and not meant to be shared — SigNoz's ClickHouse lives inside
-  `observability/signoz/`, because reaching into `infra/data/` for it
-  would suggest a sharing model that doesn't actually exist.
+  initial catalog), Redis/Valkey (no consumer yet, provisioned ahead of
+  need for first-party apps). Deliberately excludes datastores that are
+  tightly coupled to a single consumer and not meant to be shared —
+  SigNoz's ClickHouse lives inside `observability/signoz/`, because
+  reaching into `infra/data/` for it would suggest a sharing model that
+  doesn't actually exist.
 - `observability/` — OpenTelemetry collection (`otel-collector/`) and
   SigNoz (`signoz/`), split into two fragments sharing one Docker network
   so the collector and the telemetry store it feeds can be reasoned about
   independently. Profile-gated behind `observability`, which every
   environment enables by default via `COMPOSE_PROFILES` — same active
   service set as before this was gated, just now skippable.
-- `deploy/` — Komodo, the GitOps continuous-deployment layer. Lives under
-  `deploy/` rather than being lumped in with `identity/` or `data/`
-  because it's deployment logic, not a service other things call at
-  runtime — and because its own resource definitions (which servers/stacks
-  it manages) are committed here as TOML, distinct from the compose
-  fragment that runs it. Profile-gated behind `gitops` (renamed from
-  `komodo` — see [Renamed](#renamed-komodo-profile--gitops) below; the
-  Komodo service/container/folder names themselves are unaffected).
+- `ci/` — the self-hosted GitHub Actions runner pool (`github-runner/`).
+  Every environment gets its own pool, added by hand to that
+  environment's `compose.yaml` (never the shared `_template/`) — see
+  `docs/runners-and-sandboxing.md` for the label/ownership model.
 
 **`apps/`** — catalog-managed applications, split by provenance:
 `third-party/` holds compose + config for vendored apps and must never
-contain source code; `first-party/` will hold thin deploy fragments
-referencing `ghcr.io/...` images once this org's own apps are ready to be
-listed here — never their source, which lives in each app's own
-repository. Only Uptime Kuma ships in the initial catalog today (Immich
-and Stirling PDF were deferred — see Status); `first-party/` is empty on
-purpose except for a placeholder so the empty directory survives in git.
+contain source code; `first-party/` holds thin deploy fragments
+referencing `ghcr.io/...` images for this org's own apps — never their
+source, which lives in each app's own repository. `catalog.yaml` today
+lists `lazaretto` (first-party), plus `uptime-kuma` and `portainer`
+(third-party); Immich and Stirling PDF were considered early on and
+deferred — see Status.
 
 **`environments/`** — an environment is just a directory: `_template/` is
 the only one committed generically; real environments (`dev`, `prod`, a
 client's own) get created by `quarantine init` and are themselves
 committed once they exist (their `secrets.sops.yaml` is safe in git —
-encrypted — and GitOps mode requires Komodo's watched environment
-directories to be git-tracked).
+encrypted).
 
 **`provisioners/`** — idempotent scripts that ensure a database+role
 (`postgres.sh`) or a Zitadel project+OIDC client (`zitadel.sh`) exist for
@@ -144,7 +136,7 @@ behaves consistently instead of reimplementing these.
 just `new-app.sh`.
 
 **`docs/`** — this file, plus `adding-an-app.md`, `client-install.md`,
-`gitops-prod.md`, and `runners-and-sandboxing.md`.
+and `runners-and-sandboxing.md`.
 
 **`.github/workflows/`** — `verify-secrets-encrypted.yml` (fails CI if any
 `secrets.sops.yaml` anywhere in the repo is missing SOPS's `sops:` metadata
@@ -205,28 +197,6 @@ killed before persisting its credentials, the next run finds it by name
 and calls `GenerateClientSecret` to mint fresh, usable credentials for the
 *existing* application rather than creating a duplicate.
 
-## Renamed: `komodo` profile → `gitops`
-
-Two behavior changes were deliberately deferred out of the restructure
-that produced the layout above, so that restructure could stay a pure
-path move with its own clean verification, then done as a separate,
-follow-up commit:
-
-1. **Renamed the `komodo` compose profile to `gitops`**, everywhere it was
-   referenced (compose fragments, Komodo's own resource TOML, this doc).
-   The `komodo` service/container/folder names themselves are unaffected —
-   only the profile string changed.
-2. **Profile-gated `infra/observability/`** (previously always-on,
-   unprofiled) behind a new `observability` profile.
-
-Resolved once the CLI was built: `quarantine start` doesn't rely on a
-`COMPOSE_PROFILES` environment-variable default at all — it passes
-`--profile observability` explicitly on every invocation (unconditionally)
-and `--profile gitops` explicitly whenever a given environment's
-`manifest.yaml` sets `gitops: true` (see `cmd_start` in `bin/quarantine`).
-The active service set is therefore always explicit and reproducible from
-the manifest, with no implicit environment-variable state to keep in sync.
-
 ## Status
 
 Built and live-tested end-to-end (`init` → `start` → idempotent re-`start`
@@ -236,8 +206,7 @@ real OIDC provisioning against a live Zitadel instance): `infra/*`,
 `lib/common.sh`, `bin/quarantine`, `provisioners/postgres.sh`,
 `provisioners/zitadel.sh`, `install.sh`, `.gitignore`, `.sops.yaml`,
 `scripts/new-app.sh`, all of `docs/`, and both CI workflows
-(`verify-secrets-encrypted.yml`, `lint-and-validate.yml`). The `komodo` →
-`gitops` profile rename and `observability` profile-gating are both done.
+(`verify-secrets-encrypted.yml`, `lint-and-validate.yml`).
 
 Immich and Stirling PDF were removed from the initial catalog (they were
 meant as illustrative examples; re-add them via `scripts/new-app.sh` once

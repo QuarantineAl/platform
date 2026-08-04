@@ -1,0 +1,13 @@
+# infra/ci/github-runner/quarantine-container-watchdog.service — one-shot
+# unit triggered by the accompanying .timer. Not enabled/started directly;
+# see that timer's own comment for the install steps (this repo doesn't
+# auto-install systemd units — same manual-opt-in convention as
+# infra/ci/github-runner/compose.yaml itself, dev-environment only).
+[Unit]
+Description=Quarantine container watchdog (one-shot check)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/quarantine/repo/infra/ci/github-runner/watchdog.sh
