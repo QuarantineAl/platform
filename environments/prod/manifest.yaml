@@ -13,16 +13,9 @@
 #     entry whose catalog.yaml record sets needs_db / needs_oidc
 #
 # A fresh environment starts with no apps — core (Traefik, Postgres,
-# Zitadel, observability, and Komodo if the gitops profile is enabled) comes
-# up regardless. Add apps once the environment is confirmed healthy:
+# Zitadel, observability) comes up regardless. Add apps once the
+# environment is confirmed healthy:
 #
 #   quarantine app add uptime-kuma --version 1.2.3
 #   quarantine start
-#
-# gitops: true starts Komodo (GitOps continuous deployment) alongside core
-# infra. There's no CLI flag for this — hand-edit it in, then
-# `quarantine start` to apply. See docs/gitops-prod.md for when you'd want
-# this (omit entirely, or leave as `false`, for a plain CLI-managed
-# environment — the default and simplest mode).
 apps: []
-gitops: true

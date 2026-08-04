@@ -203,7 +203,7 @@ cmd_init() {
     # .sops.yaml, not from SOPS_AGE_KEY_FILE.
     ensure_sops_rule "$repo_root" "$env_name" "$age_public"
     generate_secrets "$repo_root" "$env_name" "$cf_token"
-    log "remember to git add/commit/push environments/${env_name}/secrets.sops.yaml (and .sops.yaml if this is the first environment of its name) for GitOps sync"
+    log "remember to git add/commit/push environments/${env_name}/secrets.sops.yaml (and .sops.yaml if this is the first environment of its name)"
   fi
 
   mkdir -p "$(dirname "$QUARANTINE_CONFIG_FILE")"
@@ -272,10 +272,6 @@ REQUIRED_SECRET_KEYS=(
   '.core.zitadel.masterkey'
   '.core.zitadel.admin_password'
   '.core.zitadel.db_password'
-  '.core.komodo.database_password'
-  '.core.komodo.admin_password'
-  '.core.komodo.jwt_secret'
-  '.core.komodo.webhook_secret'
   '.core.traefik.cloudflare_api_token'
   '.core.oauth2_proxy.cookie_secret'
 )
@@ -450,17 +446,10 @@ cmd_start() {
   log "starting observability"
   qcompose "$env" --profile observability up -d
 
-  local gitops_enabled
-  gitops_enabled="$(yq_get "$manifest" '.gitops')"
-  if [[ "$gitops_enabled" == "true" ]]; then
-    log "GitOps mode enabled for '${env}' — starting Komodo"
-    qcompose "$env" --profile gitops up -d
-  fi
-
   # No manifest flag for this on purpose: whether the CI runner exists for
   # an environment is decided by that environment's own compose.yaml
-  # include graph (infra/ci/github-runner/ is added by hand, dev only —
-  # see that fragment's own comment), never by a toggle here. Checking the
+  # include graph (infra/ci/github-runner/ is added by hand per environment
+  # — see that fragment's own comment), never by a toggle here. Checking the
   # assembled service list is what actually reflects that.
   #
   # QUARANTINE_SKIP_RUNNER opts out of touching the runner service at all.
@@ -543,7 +532,6 @@ generate_env_file() {
 
   local cf_token pg_admin_password
   local zitadel_masterkey zitadel_admin_password zitadel_db_password
-  local komodo_db_password komodo_admin_password komodo_jwt_secret komodo_webhook_secret
   local oauth2_cookie_secret uptime_kuma_oidc_id uptime_kuma_oidc_secret
   local github_runner_pat
 
@@ -552,10 +540,6 @@ generate_env_file() {
   zitadel_masterkey="$(req_secret "$plaintext" '.core.zitadel.masterkey' 'Zitadel masterkey')"
   zitadel_admin_password="$(req_secret "$plaintext" '.core.zitadel.admin_password' 'Zitadel admin password')"
   zitadel_db_password="$(req_secret "$plaintext" '.core.zitadel.db_password' "Zitadel's own Postgres role password")"
-  komodo_db_password="$(req_secret "$plaintext" '.core.komodo.database_password' 'Komodo Mongo password')"
-  komodo_admin_password="$(req_secret "$plaintext" '.core.komodo.admin_password' 'Komodo admin password')"
-  komodo_jwt_secret="$(req_secret "$plaintext" '.core.komodo.jwt_secret' 'Komodo JWT secret')"
-  komodo_webhook_secret="$(req_secret "$plaintext" '.core.komodo.webhook_secret' 'Komodo webhook secret')"
   oauth2_cookie_secret="$(req_secret "$plaintext" '.core.oauth2_proxy.cookie_secret' 'oauth2-proxy cookie secret')"
 
   # OIDC client id/secret are legitimately empty until provisioners/zitadel.sh
@@ -563,9 +547,10 @@ generate_env_file() {
   uptime_kuma_oidc_id="$(secrets_get "$plaintext" '.apps["uptime-kuma"].oidc_client_id')"
   uptime_kuma_oidc_secret="$(secrets_get "$plaintext" '.apps["uptime-kuma"].oidc_client_secret')"
 
-  # Dev-environment-only, legitimately empty everywhere else — read
-  # directly, not via req_secret. See secrets.example.yaml's own comment on
-  # core.github_runner.pat for why this isn't in REQUIRED_SECRET_KEYS.
+  # Legitimately empty for an environment with no runner (e.g. a client
+  # install) — read directly, not via req_secret. See
+  # secrets.example.yaml's own comment on core.github_runner.pat for why
+  # this isn't in REQUIRED_SECRET_KEYS.
   github_runner_pat="$(secrets_get "$plaintext" '.core.github_runner.pat')"
 
   {
@@ -583,18 +568,17 @@ generate_env_file() {
     # #) that would otherwise be misparsed as part of the URI structure.
     printf 'ZITADEL_DATABASE_POSTGRES_DSN=postgresql://zitadel:%s@postgres:5432/zitadel?sslmode=disable\n' "$(urlencode "$zitadel_db_password")"
 
-    printf 'KOMODO_DATABASE_USERNAME=komodo\n'
-    printf 'KOMODO_DATABASE_PASSWORD=%s\n' "$komodo_db_password"
-    printf 'KOMODO_ADMIN_PASSWORD=%s\n' "$komodo_admin_password"
-    printf 'KOMODO_JWT_SECRET=%s\n' "$komodo_jwt_secret"
-    printf 'KOMODO_WEBHOOK_SECRET=%s\n' "$komodo_webhook_secret"
-
     printf 'OAUTH2_PROXY_COOKIE_SECRET=%s\n' "$oauth2_cookie_secret"
 
     printf 'OIDC_CLIENT_ID_UPTIME_KUMA=%s\n' "$uptime_kuma_oidc_id"
     printf 'OIDC_CLIENT_SECRET_UPTIME_KUMA=%s\n' "$uptime_kuma_oidc_secret"
 
     printf 'GH_RUNNER_PAT=%s\n' "$github_runner_pat"
+    # Harmless to set even for an environment whose compose.yaml doesn't
+    # include infra/ci/github-runner/ at all — an unreferenced .env var is
+    # simply never read. One runner pool per environment, distinguished by
+    # this label (see docs/runners-and-sandboxing.md).
+    printf 'RUNNER_LABELS=self-hosted,quarantine-%s\n' "$env"
   } > "$tmp"
 
   # Version vars are computed from the manifest's OWN app list (not a
@@ -794,7 +778,7 @@ cmd_app_add() {
   fi
 
   log "added '${app_name}' to environments/${QUARANTINE_ENV}/manifest.yaml — run 'quarantine start' to apply"
-  log "remember to git add/commit/push environments/${QUARANTINE_ENV}/manifest.yaml for GitOps sync"
+  log "remember to git add/commit/push environments/${QUARANTINE_ENV}/manifest.yaml"
 }
 
 cmd_app_remove() {
@@ -815,7 +799,7 @@ cmd_app_remove() {
 
   yq eval -i "del(.apps[] | select(.name == \"${app_name}\"))" "$manifest"
   log "removed '${app_name}' from environments/${QUARANTINE_ENV}/manifest.yaml — run 'quarantine start' to stop it"
-  log "remember to git add/commit/push environments/${QUARANTINE_ENV}/manifest.yaml for GitOps sync"
+  log "remember to git add/commit/push environments/${QUARANTINE_ENV}/manifest.yaml"
 }
 
 # ---------------------------------------------------------------------------
@@ -829,7 +813,7 @@ cmd_status() {
   local catalog_list
   catalog_list="$(catalog_names)" || die "failed to read catalog.yaml — check for syntax errors"
 
-  local -a all_profiles=(--profile observability --profile gitops)
+  local -a all_profiles=(--profile observability)
   local name
   while IFS= read -r name; do
     [[ -z "$name" ]] && continue
@@ -879,7 +863,7 @@ cmd_destroy() {
   local catalog_list
   catalog_list="$(catalog_names)" || die "failed to read catalog.yaml — check for syntax errors"
 
-  local -a all_profiles=(--profile observability --profile gitops)
+  local -a all_profiles=(--profile observability)
   local name
   while IFS= read -r name; do
     [[ -z "$name" ]] && continue
