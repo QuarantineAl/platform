@@ -35,10 +35,22 @@ resource_path = ["infra/deploy/komodo/resources/servers.toml", "infra/deploy/kom
 poll_for_updates = true
 
 # --- prod: the canonical GitOps-managed environment (decision 7) ---------
+#
+# deploy = false FOR NOW, deliberately: Periphery clones this repo into
+# its OWN independent checkout, which never has environments/prod/.env
+# (gitignored on purpose — see the secrets-handover note above). Letting
+# this stack auto-deploy on creation would run `docker compose up -d`
+# against that checkout with every ${VAR} unresolved — including the
+# already-running Traefik/Postgres/Zitadel/Mongo/Komodo-core containers
+# this same profile touches, which could get recreated with blank
+# passwords. Flip to true (and re-run the resource sync) only after a
+# working .env has been placed in Periphery's actual clone path — see
+# docs/gitops-prod.md for the still-unbuilt proper fix (registering
+# secrets as Komodo Variables instead of relying on a literal .env file).
 [[stack]]
 name = "quarantine-prod"
 description = "prod environment, reconciled by Komodo from git"
-deploy = true
+deploy = false
 tags = ["prod"]
 [stack.config]
 server = "primary"
