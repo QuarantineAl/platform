@@ -11,12 +11,26 @@
 #
 # `komodo.skip` label: never let Komodo manage its own backing store.
 #
-# PIN CHECKPOINT: mongo:8.3.7 (verified 2026-07-26, latest stable at the
-# time Komodo's own database choice was confirmed). Confirm before Phase 2.
+# PIN CHECKPOINT: mongo:8.2.12 (verified 2026-08-04). Deliberately NOT the
+# newer 8.3.7 — that build refuses to start at all on a host kernel >=
+# 6.19 ("MongoDB cannot start: Linux kernel versions 6.19 and newer has a
+# known incompatibility with this version of MongoDB", a hardcoded
+# startup guard, not a runtime crash — see jira.mongodb.org/browse/
+# SERVER-121912). Confirmed empirically against the real prod host
+# (kernel 7.0.0-28-generic, Ubuntu 26.04): 8.3.7 refuses to start, with or
+# without the community-suggested GLIBC_TUNABLES=glibc.pthread.rseq=0
+# workaround (that workaround targets the underlying TCMalloc/rseq crash
+# mongod would otherwise hit — irrelevant here since mongod exits before
+# ever reaching that code path); 8.2.12 starts cleanly and the
+# healthcheck below passes. The guard appears specific to the 8.3.x line;
+# re-pin to a newer 8.3.x/8.4.x once one is confirmed to include
+# SERVER-125742's fix (removes the guard for kernel >= 7.0.14) AND to
+# actually work on whatever kernel is in use at the time — don't assume
+# a newer version number alone resolves this without testing again.
 
 services:
   mongo:
-    image: mongo:8.3.7
+    image: mongo:8.2.12
     container_name: quarantine-mongo
     restart: unless-stopped
     profiles: [gitops] # named "komodo" before the follow-up commit that renamed this profile
