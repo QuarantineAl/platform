@@ -186,3 +186,30 @@ on the prod host were decommissioned as part of the same change.
 The reap-mode additions to `postgres.sh`/`zitadel.sh` described above
 (tearing down a closed PR's database role and OIDC client) — not yet
 built for either environment.
+
+## Known issue: intermittent dispatch failures, unexplained (2026-08)
+
+Observed on the `dev` runner, root cause not found:
+
+- Push events to `lazaretto`'s `develop` branch sometimes create no workflow
+  run object at all (`gh run list`/`/status` show nothing — not even a
+  queued run), for multiple consecutive pushes over a couple of hours.
+  Ruled out: workflow-file syntax, repo Actions enablement, workflow
+  `state`, classic webhooks (a different, irrelevant mechanism). Never
+  reached a root cause — would need `admin:org` GitHub access
+  (org-level runner-group/policy inspection) that wasn't available at the
+  time.
+- Separately, the compose-managed dev runner container
+  (`quarantine-dev-runner-1`) disappeared from GitHub's own org Runners UI
+  (showed "Offline", then vanished entirely on refresh) while its local
+  process stayed healthy, correctly configured
+  (`RUNNER_SCOPE=org`/`ORG_NAME`/`LABELS`), and logged no errors. A
+  `docker restart` produced a clean deregister/re-register cycle but did not
+  restore its UI visibility. A second, disposable runner registered with a
+  fresh one-time token came up and appeared normally, and was left in place
+  as the de facto `quarantine-dev` runner.
+
+If this recurs: check githubstatus.com first (no evidence either way that
+this was GitHub-side), and note both container names/labels no longer match
+1:1 with the org's runner list — reconcile that before assuming either
+container is authoritative.

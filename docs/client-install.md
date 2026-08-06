@@ -270,6 +270,14 @@ What comes up, in this order, every run:
    Zitadel is running its own first-boot migrations against a fresh
    Postgres role, and the health check can take a couple of minutes before
    it goes green. Subsequent `start` runs are fast — nothing to migrate.
+   Once `zitadel-login` is healthy, `provisioners/zitadel.sh ensure-features`
+   runs against the live `SetInstanceFeatures` API to force
+   `loginV2.required=false` — this is re-applied on every `start`, not just
+   first boot, because the equivalent env var
+   (`ZITADEL_DEFAULTINSTANCE_FEATURES_LOGINV2_REQUIRED`) only takes effect at
+   first-ever instance creation. See `infra/identity/zitadel/compose.yaml`
+   for why this matters (a known upstream Login V2 bug in Zitadel's own
+   Console).
 4. **Observability** (SigNoz + otel-collector) — brought up unconditionally,
    always, regardless of catalog/manifest state. There's no explicit health
    wait after this step; give it a minute before expecting the SigNoz UI to
@@ -277,13 +285,20 @@ What comes up, in this order, every run:
 5. **The CI runner pool**, if this environment's `compose.yaml` includes
    `infra/ci/github-runner/` — added by hand per environment, never via
    `_template/`. See `docs/runners-and-sandboxing.md`.
-6. **Every app in `manifest.yaml`** — for a fresh environment this list is
+6. **The host's GHCR login** (`ensure_ghcr_login` in `lib/common.sh`) — logs
+   the host's own Docker daemon into `ghcr.io` using
+   `core.ghcr.pull_username`/`pull_token` from this environment's secrets,
+   if set. This is only needed for ad hoc, non-CI image pulls (`quarantine
+   start`/`app start` run directly on the host); CI's own pulls authenticate
+   separately via the ephemeral `GITHUB_TOKEN`. A no-op if those secret keys
+   are still unset.
+7. **Every app in `manifest.yaml`** — for a fresh environment this list is
    empty (`apps: []` out of `_template`), so this step is a no-op until you
    run `quarantine app add`. Once apps exist, each one needing a database
    or OIDC client gets provisioned (`provisioners/postgres.sh` /
    `provisioners/zitadel.sh`) before all manifest apps are started together
    in one combined `up -d` call.
-7. **Anything running that's no longer in the manifest** gets stopped (not
+8. **Anything running that's no longer in the manifest** gets stopped (not
    removed, not volume-deleted) — this is the other half of "manifest is
    desired state": removing an app from the manifest and re-running `start`
    is how it actually stops.
