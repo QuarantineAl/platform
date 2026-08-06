@@ -123,8 +123,13 @@ encrypted).
 (`postgres.sh`) or a Zitadel project+OIDC client (`zitadel.sh`) exist for
 whatever the manifest currently lists. Both are called from `bin/quarantine`
 — never invoked by an operator directly, though both accept the same
-`<repo_root> <env> <plaintext_secrets_file> <name>` signature if invoked
-standalone (e.g. for debugging).
+`<repo_root> <env> <plaintext_secrets_file> <name>` per-app signature if
+invoked standalone (e.g. for debugging). `zitadel.sh` additionally has an
+`ensure-features` mode that's instance-wide rather than per-app — it takes
+no `<name>` argument (`<repo_root> <env> <plaintext_secrets_file>` only) and
+self-heals the live instance's `loginV2.required` feature flag via
+Zitadel's `SetInstanceFeatures` API; `bin/quarantine` calls it on every
+`start`, right after `zitadel-login` reports healthy.
 
 **`lib/common.sh`** — the one place output helpers, the yq/sops wrappers,
 the compose invocation wrapper (`qcompose`), health-gating, and secret
