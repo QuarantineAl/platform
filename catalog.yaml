@@ -42,18 +42,23 @@ apps:
       build time (Vite loads frontend/.env.production, not a build ARG —
       see that file's own Dockerfile comment), pointed at this
       environment's -api hostname by the calling CI workflow. The platform's
-      first multi-origin OIDC consumer: the oauth2-proxy-lazaretto instance
-      (infra/edge/oauth2-proxy/compose.yaml) sets OAUTH2_PROXY_COOKIE_DOMAINS
-      to the shared parent domain so its cookie is valid on both hostnames,
-      and forwardAuth gates both of this app's routers wholesale — no
-      unauthenticated path, unlike uptime-kuma's public/admin split (own
-      ARCHITECTURE.md-documented "no auth" gap this closes). Only the
-      persistent host's callback is registered above — PR sandboxes
-      (pr-<n>-lazaretto, see docs/runners-and-sandboxing.md) ride the same
-      shared Application/cookie rather than getting their own redirect URI;
-      see docs/adding-oidc-to-your-app.md for the full recipe and
-      docs/USER_MANAGEMENT_OIDC_ZITADEL.md (in the lazaretto repo) for the
-      app-side JWT verification this backs.
+      first multi-origin, PR-sandboxed OIDC consumer: the
+      oauth2-proxy-lazaretto instance (infra/edge/oauth2-proxy/compose.yaml)
+      is ${SUBDOMAIN}-templated (one per open PR sandbox plus the
+      persistent deployment), each sets OAUTH2_PROXY_COOKIE_DOMAINS to the
+      shared parent domain so its cookie is valid across both of that
+      instance's hostnames, and forwardAuth gates both of this app's
+      routers wholesale — no unauthenticated path, unlike uptime-kuma's
+      public/admin split (own ARCHITECTURE.md-documented "no auth" gap this
+      closes). Only the persistent host's callback is registered above —
+      every PR sandbox (pr-<n>-lazaretto, see docs/runners-and-sandboxing.md)
+      shares the ONE Zitadel Application (same client_id/secret) but
+      registers and later deregisters its OWN redirect URI on it via
+      provisioners/zitadel.sh's add-redirect/remove-redirect modes, called
+      from QuarantineAl/.github's pr-sandbox-up.yml/pr-sandbox-down.yml as
+      the sandbox opens/closes. See docs/adding-oidc-to-your-app.md for the
+      full recipe and docs/USER_MANAGEMENT_OIDC_ZITADEL.md (in the lazaretto
+      repo) for the app-side JWT verification this backs.
 
   - name: uptime-kuma
     kind: app

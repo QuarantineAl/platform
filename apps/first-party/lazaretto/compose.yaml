@@ -19,8 +19,10 @@
 # `--profile lazaretto` or these services never start.
 #
 # No database (own SQLite volume, catalog.yaml: needs_db: false).
-# needs_oidc: true — fronted by the oauth2-proxy-lazaretto sidecar (infra/
-# edge/oauth2-proxy/compose.yaml), closing lazaretto's own
+# needs_oidc: true — fronted by a PER-SUBDOMAIN oauth2-proxy-lazaretto
+# sidecar (infra/edge/oauth2-proxy/compose.yaml, brought up alongside this
+# file with the same SUBDOMAIN/DOMAIN — see that file's own header and
+# QuarantineAl/.github's pr-sandbox-up.yml), closing lazaretto's own
 # ARCHITECTURE.md-documented "no auth" gap. Both routers below are gated
 # wholesale (no public/admin split like uptime-kuma's — lazaretto has no
 # legitimate unauthenticated path), and the backend independently verifies
@@ -74,10 +76,11 @@ services:
       # so it can catch the 401 forwardAuth short-circuits with — reversed,
       # that 401 would hit the browser directly with no redirect to sign-in
       # (see apps/third-party/uptime-kuma/compose.yaml's identical ordering
-      # note). The right-hand side is a fixed literal, not ${SUBDOMAIN}
-      # templated: every invocation of this fragment (persistent or PR
-      # sandbox) shares the ONE oauth2-proxy-lazaretto instance.
-      - traefik.http.routers.${SUBDOMAIN:-lazaretto}-api.middlewares=oauth2-errors-lazaretto,oauth2-auth-lazaretto
+      # note). Both sides are ${SUBDOMAIN}-templated: this invocation's own
+      # oauth2-proxy-${SUBDOMAIN:-lazaretto} instance (infra/edge/
+      # oauth2-proxy/compose.yaml) is what actually answers for THIS
+      # router's host, not a fixed shared one.
+      - traefik.http.routers.${SUBDOMAIN:-lazaretto}-api.middlewares=oauth2-errors-${SUBDOMAIN:-lazaretto},oauth2-auth-${SUBDOMAIN:-lazaretto}
 
   lazaretto-frontend:
     image: ghcr.io/quarantineal/lazaretto-frontend:${LAZARETTO_VERSION:-CHANGEME}
@@ -96,11 +99,12 @@ services:
       - traefik.http.routers.${SUBDOMAIN:-lazaretto}.tls=true
       # Explicit low priority: this router's bare Host() rule would
       # otherwise also match /oauth2/* paths on this host. It must lose to
-      # oauth2-proxy-lazaretto's own router (priority=100, PathPrefix
-      # `/oauth2/`, infra/edge/oauth2-proxy/compose.yaml) or sign-in/
-      # callback requests would be swallowed here instead.
+      # THIS invocation's own oauth2-proxy-${SUBDOMAIN:-lazaretto} router
+      # (priority=100, PathPrefix `/oauth2/`, infra/edge/oauth2-proxy/
+      # compose.yaml) or sign-in/callback requests would be swallowed here
+      # instead.
       - traefik.http.routers.${SUBDOMAIN:-lazaretto}.priority=10
-      - traefik.http.routers.${SUBDOMAIN:-lazaretto}.middlewares=oauth2-errors-lazaretto,oauth2-auth-lazaretto
+      - traefik.http.routers.${SUBDOMAIN:-lazaretto}.middlewares=oauth2-errors-${SUBDOMAIN:-lazaretto},oauth2-auth-${SUBDOMAIN:-lazaretto}
       - traefik.http.routers.${SUBDOMAIN:-lazaretto}.service=${SUBDOMAIN:-lazaretto}-frontend
 
 networks:
