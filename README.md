@@ -101,7 +101,7 @@ are in the manifest:
 | Postgres 17.10-alpine | Shared datastore | stock image, one database + role per consumer; not a vendor fork |
 | Zitadel v4.16.1 (`zitadel-api` + `zitadel-login`) | OIDC identity provider | backs both the CLI's own provisioners and every catalog app with `needs_oidc: true` |
 | SigNoz + otel-collector | Observability | always on — `quarantine start` passes `--profile observability` unconditionally |
-| oauth2-proxy | Forward-auth sidecar | present in every environment, but does nothing until a catalog app that needs it (e.g. uptime-kuma) is in the manifest |
+| oauth2-proxy | Forward-auth sidecar | present in every environment; one named instance per `needs_oidc` consumer (e.g. uptime-kuma, lazaretto), each dormant until its own profile is in the manifest — see `docs/adding-oidc-to-your-app.md` |
 
 One thing that is *not* part of that default set:
 
@@ -112,13 +112,17 @@ One thing that is *not* part of that default set:
 ## The app catalog
 
 `catalog.yaml` is the registry of every app `quarantine app add` knows
-how to deploy. Today it holds **lazaretto** (first-party), **uptime-kuma**
-(subdomain `status`, no database, OIDC-fronted), and **portainer**
-(internal container management, one instance per environment). Uptime
-Kuma itself has no native OIDC support, so the OIDC client its entry
-provisions is actually consumed by an oauth2-proxy forward-auth sidecar in
-front of it, not by Uptime Kuma directly — public status-page paths stay
-unauthenticated, only the admin UI is protected.
+how to deploy. Today it holds **lazaretto** (first-party, two-origin,
+OIDC-fronted), **uptime-kuma** (subdomain `status`, no database,
+OIDC-fronted), and **portainer** (internal container management, one
+instance per environment). Neither Lazaretto nor Uptime Kuma has native
+OIDC support, so the OIDC client each entry provisions is actually
+consumed by its own oauth2-proxy forward-auth sidecar, not the app
+directly — one named instance per consumer (see
+`docs/adding-oidc-to-your-app.md`). Uptime Kuma splits public status-page
+paths (unauthenticated) from its admin UI (protected); Lazaretto has no
+public path at all, so both of its routers (frontend + API) are gated
+wholesale.
 
 ```bash
 quarantine app add uptime-kuma --version 1.2.3
