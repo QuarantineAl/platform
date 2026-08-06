@@ -5,11 +5,12 @@
 # docs/architecture.md's Phase 3 notes).
 #
 # Not invoked directly by CI or by hand — `quarantine start` calls the
-# default ("ensure") mode, and `quarantine app add-redirect`/
-# `remove-redirect` (bin/quarantine) call the two redirect modes. Both
-# layers decrypt secrets and validate the app name/needs_oidc flag before
-# reaching this script; invoking it standalone (e.g. for debugging) still
-# works with a manually-decrypted plaintext file, per its own usage below.
+# default ("ensure") mode and the "ensure-features" mode, and `quarantine
+# app add-redirect`/`remove-redirect` (bin/quarantine) call the two
+# redirect modes. Both layers decrypt secrets and validate the app
+# name/needs_oidc flag before reaching this script; invoking it standalone
+# (e.g. for debugging) still works with a manually-decrypted plaintext
+# file, per its own usage below.
 #
 # Usage:
 #   provisioners/zitadel.sh <repo_root> <env> <plaintext_secrets_file> <name>
@@ -17,6 +18,16 @@
 #       catalog app <name> (e.g. "uptime-kuma"), matching this platform's
 #       one-Application-per-catalog-app model. Every catalog app still uses
 #       exactly this — nothing below changes for them.
+#
+#   provisioners/zitadel.sh ensure-features <repo_root> <env> <plaintext_secrets_file>
+#       Instance-wide (not per-app): ensures the loginV2.required instance
+#       feature is off, via the live SetInstanceFeatures API. Needed
+#       because ZITADEL_DEFAULTINSTANCE_FEATURES_LOGINV2_REQUIRED (infra/
+#       identity/zitadel/compose.yaml) only takes effect at first-ever
+#       instance creation — confirmed live: flipping that env var and
+#       restarting an already-bootstrapped instance changed nothing. Called
+#       on every `quarantine start` (self-healing if ever flipped back via
+#       Console) rather than once, matching every other provisioner here.
 #
 #   provisioners/zitadel.sh add-redirect <repo_root> <env> <plaintext_secrets_file> <canonical_name> <redirect_uri>
 #   provisioners/zitadel.sh remove-redirect <repo_root> <env> <plaintext_secrets_file> <canonical_name> <redirect_uri>
@@ -87,17 +98,23 @@ require_cmd docker sops yq flock
 
 # --- mode + argument parsing -------------------------------------------------
 MODE="ensure"
-if [[ "${1:-}" == "add-redirect" || "${1:-}" == "remove-redirect" ]]; then
+if [[ "${1:-}" == "add-redirect" || "${1:-}" == "remove-redirect" || "${1:-}" == "ensure-features" ]]; then
   MODE="$1"
   shift
 fi
 
 redirect_uri=""
+name=""
 if [[ "$MODE" == "ensure" ]]; then
   if [[ $# -ne 4 ]]; then
     die "usage: provisioners/zitadel.sh <repo_root> <env> <plaintext_secrets_file> <name>"
   fi
   repo_root="$1" env="$2" plaintext_file="$3" name="$4"
+elif [[ "$MODE" == "ensure-features" ]]; then
+  if [[ $# -ne 3 ]]; then
+    die "usage: provisioners/zitadel.sh ensure-features <repo_root> <env> <plaintext_secrets_file>"
+  fi
+  repo_root="$1" env="$2" plaintext_file="$3"
 else
   if [[ $# -ne 5 ]]; then
     die "usage: provisioners/zitadel.sh ${MODE} <repo_root> <env> <plaintext_secrets_file> <canonical_name> <redirect_uri>"
@@ -109,9 +126,11 @@ fi
 [[ -f "$plaintext_file" ]] || die "plaintext secrets file not found: $plaintext_file"
 # Same gate as postgres.sh, for the same reason: this script is directly
 # invocable with a bare name argument, and `name` ends up embedded in JSON
-# request bodies below.
-[[ "$name" =~ ^[a-z][a-z0-9-]*$ ]] \
-  || die "invalid name '${name}': lowercase letters, digits, hyphens only, must start with a letter"
+# request bodies below. ensure-features has no per-app name, so it's exempt.
+if [[ "$MODE" != "ensure-features" ]]; then
+  [[ "$name" =~ ^[a-z][a-z0-9-]*$ ]] \
+    || die "invalid name '${name}': lowercase letters, digits, hyphens only, must start with a letter"
+fi
 
 # PIN CHECKPOINT: curlimages/curl:8.11.1 (verified 2026-07-26) — a minimal,
 # official image used only as a throwaway HTTP client inside the docker
@@ -173,6 +192,18 @@ zitadel_call() {
   printf 'header = "Authorization: Bearer %s"\n' "$provisioner_pat" \
     | docker run --rm -i --network "$ZITADEL_NETWORK" "$CURL_IMAGE" "${curl_args[@]}"
 }
+
+# =============================================================================
+# ensure-features: instance-wide, not per-app. Exits before reaching the
+# org/project/application logic below, which only "ensure" and the redirect
+# modes need.
+# =============================================================================
+if [[ "$MODE" == "ensure-features" ]]; then
+  log "ensuring Zitadel instance feature loginV2.required is disabled (Console's own OIDC redirect into Login V2 loses the authRequest context and dead-ends — zitadel/zitadel#10526, #11134, #11142; the legacy UI doesn't have this problem)"
+  zitadel_call PUT /v2/features/instance '{"loginV2":{"required":false}}' >/dev/null \
+    || die "failed to set Zitadel instance feature loginV2.required=false"
+  exit 0
+fi
 
 # --- resolve our own organization id ----------------------------------------
 whoami_response="$(zitadel_call GET /auth/v1/users/me)" || die "failed to query /auth/v1/users/me — is the provisioner PAT valid?"
