@@ -6,22 +6,32 @@
 # infrastructure, not something specific to any one app. Originally
 # single-tenant (one shared instance hardcoded to Uptime Kuma's client/
 # redirect/cookie domain); generalized into ONE NAMED SERVICE PER CONSUMER
-# when wg-easy became the second app needing forward-auth — each instance
-# gets its own profile, own OIDC client env vars, own redirect URL/cookie
-# domain, and its own uniquely-named Traefik router + middlewares (Traefik
-# aggregates middleware/router definitions project-wide regardless of
-# which file declares them, so names must stay unique across every
-# instance here). All instances share the one `core.oauth2_proxy.
-# cookie_secret` secret — safe to reuse: it only signs each instance's own
-# session cookie, scoped by browser same-origin rules to that instance's
-# own Host(), never cross-readable between consumers regardless of sharing
-# the signing secret.
+# when Lazaretto became the second app needing forward-auth — each instance
+# gets its own profile, own OIDC client env vars, own redirect URL, and its
+# own uniquely-named Traefik router + middlewares (Traefik aggregates
+# middleware/router definitions project-wide regardless of which file
+# declares them, so names must stay unique across every instance here).
+# All instances share the one `core.oauth2_proxy.cookie_secret` secret —
+# safe to reuse: it only signs each instance's own session cookie, never
+# cross-readable between consumers regardless of sharing the signing
+# secret (each instance's cookie NAME must still be unique the moment its
+# cookie domain broadens past its own single host — see Lazaretto below).
 #
-# Adding a THIRD consumer: copy one of the blocks below, rename every
-# `-<app>` suffix (service key, container_name, profiles, env var names,
-# router/middleware names) to the new app's name, and point
+# Full self-service recipe — single-origin AND multi-origin consumers, the
+# forwarded-identity contract every first-party app's backend must honor,
+# and troubleshooting — lives in docs/adding-oidc-to-your-app.md; read
+# that before adding a new consumer here. Short version: copy the
+# Lazaretto block below for a multi-origin app (frontend + API on sibling
+# subdomains) or the Uptime Kuma block for a single-origin one; rename
+# every `-<app>` suffix (service key, container_name, profile, env var
+# names, router/middleware names) to the new app's name; point
 # OAUTH2_PROXY_REDIRECT_URL / the router's Host() at that app's own
-# subdomain.
+# subdomain(s); add the matching consumer block to catalog.yaml
+# (needs_oidc: true + oidc_redirect_uris) and to the app's own
+# compose.yaml (forwardAuth middleware on every router that needs
+# protecting). Nothing in THIS file's shared shape (services:/networks:)
+# should need touching for a new consumer — if it does, the
+# generalization has regressed.
 #
 # PIN CHECKPOINT: quay.io/oauth2-proxy/oauth2-proxy:v7.15.3 (verified
 # 2026-07-26). Confirm before Phase 2.
@@ -62,6 +72,10 @@ services:
       - traefik.http.routers.oauth2-proxy-uptime-kuma.priority=100
       - traefik.http.routers.oauth2-proxy-uptime-kuma.service=oauth2-proxy-uptime-kuma
 
+      # Uptime Kuma routing is unchanged behaviorally by the per-consumer
+      # split: its middleware names (oauth2-auth, oauth2-errors) are left
+      # unsuffixed on purpose, so nothing in
+      # apps/third-party/uptime-kuma/compose.yaml needed to change.
       - traefik.http.middlewares.oauth2-auth.forwardauth.address=http://oauth2-proxy-uptime-kuma:4180/oauth2/auth
       - traefik.http.middlewares.oauth2-auth.forwardauth.trustForwardHeader=true
       - traefik.http.middlewares.oauth2-auth.forwardauth.authResponseHeaders=X-Auth-Request-User,X-Auth-Request-Email,X-Auth-Request-Groups,Authorization
@@ -71,46 +85,105 @@ services:
       - traefik.http.middlewares.oauth2-errors.errors.query=/oauth2/sign_in?rd={url}
       - traefik.http.middlewares.oauth2-errors.errors.statusRewrites.401=302
 
-  oauth2-proxy-wg-easy:
+  # Lazaretto: the platform's first MULTI-ORIGIN consumer — frontend at
+  # lazaretto.${DOMAIN}, backend/API at lazaretto-api.${DOMAIN} (sibling
+  # subdomains, see apps/first-party/lazaretto/compose.yaml). One
+  # oauth2-proxy instance still fronts both: its own router only needs to
+  # live on the frontend host (that's where /oauth2/callback and
+  # /oauth2/sign_in are reachable), but its cookie must be readable on
+  # BOTH hosts, and the forwardAuth middleware it exposes gets attached to
+  # BOTH of Lazaretto's routers (see docs/adding-oidc-to-your-app.md for
+  # the full recipe this generalizes from).
+  oauth2-proxy-lazaretto:
     image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.3
-    container_name: quarantine-oauth2-proxy-wg-easy
+    container_name: quarantine-oauth2-proxy-lazaretto
     restart: unless-stopped
-    profiles: [wg-easy]
+    profiles: [lazaretto]
     environment:
       OAUTH2_PROXY_PROVIDER: oidc
       OAUTH2_PROXY_OIDC_ISSUER_URL: https://auth.${DOMAIN}
-      OAUTH2_PROXY_CLIENT_ID: ${OIDC_CLIENT_ID_WG_EASY}
-      OAUTH2_PROXY_CLIENT_SECRET: ${OIDC_CLIENT_SECRET_WG_EASY}
+      OAUTH2_PROXY_CLIENT_ID: ${OIDC_CLIENT_ID_LAZARETTO}
+      OAUTH2_PROXY_CLIENT_SECRET: ${OIDC_CLIENT_SECRET_LAZARETTO}
       OAUTH2_PROXY_COOKIE_SECRET: ${OAUTH2_PROXY_COOKIE_SECRET}
+      # Own cookie NAME, not just its own cookie secret: COOKIE_DOMAINS
+      # below deliberately broadens this instance's cookie beyond its own
+      # host, to every host under ${DOMAIN} — including every OTHER
+      # consumer's single-origin host (status.${DOMAIN}, etc). oauth2-proxy
+      # defaults every instance to the same cookie name (_oauth2_proxy);
+      # left at that default, a browser authenticated to Lazaretto would
+      # also present this cookie when visiting, say, status.${DOMAIN},
+      # alongside Uptime Kuma's own same-named-by-default, host-scoped
+      # cookie — two same-named cookies with different values in one
+      # Cookie header, ambiguous for whichever server reads it first. Any
+      # consumer that sets COOKIE_DOMAINS broader than its own single host
+      # MUST set a unique COOKIE_NAME for exactly this reason.
+      OAUTH2_PROXY_COOKIE_NAME: _oauth2_proxy_lazaretto
+      # Plural env var, list-typed (confirmed against oauth2-proxy's own
+      # docs) — the shared parent of lazaretto.${DOMAIN} and
+      # lazaretto-api.${DOMAIN}, so the session cookie set while visiting
+      # the frontend is also sent on the browser's calls to -api. Fails
+      # SILENTLY if wrong or omitted: login appears to succeed (the
+      # frontend host got a valid cookie), then every API call still comes
+      # back unauthenticated, with nothing in either log pointing at a
+      # cookie-domain mismatch.
+      OAUTH2_PROXY_COOKIE_DOMAINS: .${DOMAIN}
       OAUTH2_PROXY_EMAIL_DOMAINS: "*"
       OAUTH2_PROXY_REVERSE_PROXY: "true"
       OAUTH2_PROXY_HTTP_ADDRESS: 0.0.0.0:4180
       OAUTH2_PROXY_UPSTREAMS: static://202
-      OAUTH2_PROXY_REDIRECT_URL: https://vpn.${DOMAIN}/oauth2/callback
+      # Fixed to the persistent host, not ${SUBDOMAIN}-templated: this
+      # service is core infra (one instance per environment, included via
+      # environments/_template/compose.yaml), never re-invoked per PR
+      # sandbox the way apps/first-party/lazaretto/compose.yaml is — so
+      # ${SUBDOMAIN} has no meaning in this file. Must match one of
+      # catalog.yaml's lazaretto oidc_redirect_uris exactly, or Zitadel
+      # rejects the callback.
+      OAUTH2_PROXY_REDIRECT_URL: https://lazaretto.${DOMAIN}/oauth2/callback
       OAUTH2_PROXY_SET_XAUTHREQUEST: "true"
+      # PASS_ (not SET_) is what actually forwards the raw ID token to the
+      # upstream app as `Authorization: Bearer <id_token>` — see the
+      # platform's forwarded-identity contract in
+      # docs/adding-oidc-to-your-app.md for the SET_/PASS_ distinction and
+      # why every first-party app relies on this, not just
+      # X-Auth-Request-*.
+      OAUTH2_PROXY_PASS_AUTHORIZATION_HEADER: "true"
       OAUTH2_PROXY_SKIP_PROVIDER_BUTTON: "true"
-      OAUTH2_PROXY_SCOPE: "openid email profile"
+      # openid/email/profile: standard claims. resourceowner: Zitadel org
+      # id (User.zitadelOrgId). projects:roles (plural, no project id
+      # needed — confirmed against Zitadel's reserved-scopes docs):
+      # requests the `urn:zitadel:iam:org:project:<id>:roles` claim for
+      # whichever project this app's OIDC client belongs to, which is
+      # exactly the claim-key pattern lazaretto-backend's AuthService scans
+      # for — it never needs to know the shared quarantine-apps project's
+      # id statically either.
+      OAUTH2_PROXY_SCOPE: "openid email profile urn:zitadel:iam:user:resourceowner urn:zitadel:iam:org:projects:roles"
     networks:
       - edge
     # No healthcheck — same reasoning as oauth2-proxy-uptime-kuma above.
     labels:
       - traefik.enable=true
-      - traefik.http.services.oauth2-proxy-wg-easy.loadbalancer.server.port=4180
+      - traefik.http.services.oauth2-proxy-lazaretto.loadbalancer.server.port=4180
 
-      - traefik.http.routers.oauth2-proxy-wg-easy.rule=Host(`vpn.${DOMAIN}`) && PathPrefix(`/oauth2/`)
-      - traefik.http.routers.oauth2-proxy-wg-easy.entrypoints=websecure
-      - traefik.http.routers.oauth2-proxy-wg-easy.tls=true
-      - traefik.http.routers.oauth2-proxy-wg-easy.priority=100
-      - traefik.http.routers.oauth2-proxy-wg-easy.service=oauth2-proxy-wg-easy
+      # Lives only on the frontend host — /oauth2/callback and
+      # /oauth2/sign_in never need to be reachable on the -api host
+      # directly (see docs/adding-oidc-to-your-app.md). priority=100 must
+      # outrank Lazaretto's own frontend router (a bare Host() catch-all
+      # on this same host, see apps/first-party/lazaretto/compose.yaml),
+      # or that router would swallow /oauth2/* requests instead.
+      - traefik.http.routers.oauth2-proxy-lazaretto.rule=Host(`lazaretto.${DOMAIN}`) && PathPrefix(`/oauth2/`)
+      - traefik.http.routers.oauth2-proxy-lazaretto.entrypoints=websecure
+      - traefik.http.routers.oauth2-proxy-lazaretto.tls=true
+      - traefik.http.routers.oauth2-proxy-lazaretto.priority=100
+      - traefik.http.routers.oauth2-proxy-lazaretto.service=oauth2-proxy-lazaretto
 
-      - traefik.http.middlewares.oauth2-auth-wg-easy.forwardauth.address=http://oauth2-proxy-wg-easy:4180/oauth2/auth
-      - traefik.http.middlewares.oauth2-auth-wg-easy.forwardauth.trustForwardHeader=true
-      - traefik.http.middlewares.oauth2-auth-wg-easy.forwardauth.authResponseHeaders=X-Auth-Request-User,X-Auth-Request-Email,X-Auth-Request-Groups,Authorization
+      - traefik.http.middlewares.oauth2-auth-lazaretto.forwardauth.address=http://oauth2-proxy-lazaretto:4180/oauth2/auth
+      - traefik.http.middlewares.oauth2-auth-lazaretto.forwardauth.trustForwardHeader=true
+      - traefik.http.middlewares.oauth2-auth-lazaretto.forwardauth.authResponseHeaders=X-Auth-Request-User,X-Auth-Request-Email,X-Auth-Request-Groups,Authorization
 
-      - traefik.http.middlewares.oauth2-errors-wg-easy.errors.status=401-403
-      - traefik.http.middlewares.oauth2-errors-wg-easy.errors.service=oauth2-proxy-wg-easy
-      - traefik.http.middlewares.oauth2-errors-wg-easy.errors.query=/oauth2/sign_in?rd={url}
-      - traefik.http.middlewares.oauth2-errors-wg-easy.errors.statusRewrites.401=302
+      - traefik.http.middlewares.oauth2-errors-lazaretto.errors.status=401-403
+      - traefik.http.middlewares.oauth2-errors-lazaretto.errors.service=oauth2-proxy-lazaretto
+      - traefik.http.middlewares.oauth2-errors-lazaretto.errors.query=/oauth2/sign_in?rd={url}
+      - traefik.http.middlewares.oauth2-errors-lazaretto.errors.statusRewrites.401=302
 
 networks:
   edge:
