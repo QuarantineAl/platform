@@ -367,12 +367,25 @@ generate_secrets() {
   # — see secrets.example.yaml's own comment on that key -------------------
   for key in \
     '.core.zitadel.provisioner_pat' \
-    '.core.github_runner.pat' \
-    '.apps["uptime-kuma"].oidc_client_id' \
-    '.apps["uptime-kuma"].oidc_client_secret'
+    '.core.github_runner.pat'
   do
     yq eval -i "${key} = \"\"" "$tmp"
   done
+
+  # Every catalog app with needs_oidc:true gets its own deferred
+  # apps.<name>.oidc_client_id/oidc_client_secret pair — driven off
+  # catalog.yaml, not a hardcoded per-app list (this used to only cover
+  # uptime-kuma). Same reasoning as the version_vars derivation in
+  # generate_env_file below: a new needs_oidc app needs this function
+  # untouched.
+  local oidc_apps oidc_app
+  oidc_apps="$(yq eval '.apps[] | select(.needs_oidc == true) | .name' "${repo_root}/catalog.yaml")" \
+    || die "failed to read catalog.yaml for needs_oidc apps — check for syntax errors"
+  while IFS= read -r oidc_app; do
+    [[ -z "$oidc_app" ]] && continue
+    yq eval -i ".apps[\"${oidc_app}\"].oidc_client_id = \"\"" "$tmp"
+    yq eval -i ".apps[\"${oidc_app}\"].oidc_client_secret = \"\"" "$tmp"
+  done <<< "$oidc_apps"
 
   # --filename-override tells sops which path to match .sops.yaml's
   # creation_rules against — sops otherwise matches against the path of
@@ -532,7 +545,7 @@ generate_env_file() {
 
   local cf_token pg_admin_password
   local zitadel_masterkey zitadel_admin_password zitadel_db_password
-  local oauth2_cookie_secret uptime_kuma_oidc_id uptime_kuma_oidc_secret
+  local oauth2_cookie_secret
   local github_runner_pat
 
   cf_token="$(req_secret "$plaintext" '.core.traefik.cloudflare_api_token' 'Cloudflare API token')"
@@ -541,11 +554,6 @@ generate_env_file() {
   zitadel_admin_password="$(req_secret "$plaintext" '.core.zitadel.admin_password' 'Zitadel admin password')"
   zitadel_db_password="$(req_secret "$plaintext" '.core.zitadel.db_password' "Zitadel's own Postgres role password")"
   oauth2_cookie_secret="$(req_secret "$plaintext" '.core.oauth2_proxy.cookie_secret' 'oauth2-proxy cookie secret')"
-
-  # OIDC client id/secret are legitimately empty until provisioners/zitadel.sh
-  # runs — read directly, not via req_secret.
-  uptime_kuma_oidc_id="$(secrets_get "$plaintext" '.apps["uptime-kuma"].oidc_client_id')"
-  uptime_kuma_oidc_secret="$(secrets_get "$plaintext" '.apps["uptime-kuma"].oidc_client_secret')"
 
   # Legitimately empty for an environment with no runner (e.g. a client
   # install) — read directly, not via req_secret. See
@@ -570,9 +578,6 @@ generate_env_file() {
 
     printf 'OAUTH2_PROXY_COOKIE_SECRET=%s\n' "$oauth2_cookie_secret"
 
-    printf 'OIDC_CLIENT_ID_UPTIME_KUMA=%s\n' "$uptime_kuma_oidc_id"
-    printf 'OIDC_CLIENT_SECRET_UPTIME_KUMA=%s\n' "$uptime_kuma_oidc_secret"
-
     printf 'GH_RUNNER_PAT=%s\n' "$github_runner_pat"
     # Harmless to set even for an environment whose compose.yaml doesn't
     # include infra/ci/github-runner/ at all — an unreferenced .env var is
@@ -580,6 +585,24 @@ generate_env_file() {
     # this label (see docs/runners-and-sandboxing.md).
     printf 'RUNNER_LABELS=self-hosted,quarantine-%s\n' "$env"
   } > "$tmp"
+
+  # OIDC_CLIENT_ID_<APP>/OIDC_CLIENT_SECRET_<APP> pairs are computed from
+  # catalog.yaml's OWN needs_oidc entries (not a hardcoded per-app list —
+  # this used to only cover uptime-kuma) — same reasoning as version_vars
+  # right below: a new needs_oidc app needs this function untouched.
+  # Values are legitimately empty until provisioners/zitadel.sh has run
+  # once for that app — read directly via secrets_get, not req_secret.
+  local oidc_apps oidc_app oidc_id oidc_secret oidc_var
+  oidc_apps="$(yq eval '.apps[] | select(.needs_oidc == true) | .name' "${repo_root}/catalog.yaml")" \
+    || die "failed to read catalog.yaml for needs_oidc apps — check for syntax errors"
+  while IFS= read -r oidc_app; do
+    [[ -z "$oidc_app" ]] && continue
+    oidc_id="$(secrets_get "$plaintext" ".apps[\"${oidc_app}\"].oidc_client_id")"
+    oidc_secret="$(secrets_get "$plaintext" ".apps[\"${oidc_app}\"].oidc_client_secret")"
+    oidc_var="$(printf '%s' "$oidc_app" | tr '[:lower:]-' '[:upper:]_')"
+    printf 'OIDC_CLIENT_ID_%s=%s\n' "$oidc_var" "$oidc_id" >> "$tmp"
+    printf 'OIDC_CLIENT_SECRET_%s=%s\n' "$oidc_var" "$oidc_secret" >> "$tmp"
+  done <<< "$oidc_apps"
 
   # Version vars are computed from the manifest's OWN app list (not a
   # hardcoded name list) and explicitly unset before manifest_export_versions
