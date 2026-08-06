@@ -18,11 +18,18 @@
 # uses) — any invocation of this file, catalog or PR sandbox, must pass
 # `--profile lazaretto` or these services never start.
 #
-# No database (own SQLite volume, catalog.yaml: needs_db: false). No
-# native auth (catalog.yaml: needs_oidc: false for now — see lazaretto's
-# own ARCHITECTURE.md "no auth" gap; flip needs_oidc later + front it with
-# oauth2-proxy, same pattern as uptime-kuma, no lazaretto-side change
-# needed).
+# No database (own SQLite volume, catalog.yaml: needs_db: false).
+# needs_oidc: true — fronted by a PER-SUBDOMAIN oauth2-proxy-lazaretto
+# sidecar (infra/edge/oauth2-proxy/compose.yaml, brought up alongside this
+# file with the same SUBDOMAIN/DOMAIN — see that file's own header and
+# QuarantineAl/.github's pr-sandbox-up.yml), closing lazaretto's own
+# ARCHITECTURE.md-documented "no auth" gap. Both routers below are gated
+# wholesale (no public/admin split like uptime-kuma's — lazaretto has no
+# legitimate unauthenticated path), and the backend independently verifies
+# the forwarded ID token itself (AUTH_MODE=required below) as defense in
+# depth. See docs/adding-oidc-to-your-app.md for the full recipe this
+# follows, and lazaretto's own docs/USER_MANAGEMENT_OIDC_ZITADEL.md for the
+# app-side implementation this wires up to.
 
 services:
   lazaretto-backend:
@@ -36,6 +43,15 @@ services:
       - lazaretto-data:/app/data
     environment:
       FRONTEND_ORIGIN: https://${SUBDOMAIN:-lazaretto}.${DOMAIN}
+      # Deliberately unconditional, not ${SUBDOMAIN}-toggled: this fragment
+      # is only ever invoked behind Traefik + oauth2-proxy-lazaretto (never
+      # bare local dev, which instead runs `npm run start:dev` + Vite
+      # directly per lazaretto's own docs/USER_MANAGEMENT_OIDC_ZITADEL.md)
+      # — every invocation, persistent or PR sandbox, gets a forwarded
+      # token because forwardAuth gates both routers below unconditionally
+      # too. Safe to require auth here without a per-invocation switch.
+      AUTH_MODE: required
+      ZITADEL_ISSUER_URL: https://auth.${DOMAIN}
     healthcheck:
       # 127.0.0.1, not localhost: this image's /etc/hosts resolves
       # "localhost" to ::1 as well as 127.0.0.1, and wget tries that first —
@@ -56,6 +72,15 @@ services:
       - traefik.http.routers.${SUBDOMAIN:-lazaretto}-api.entrypoints=websecure
       - traefik.http.routers.${SUBDOMAIN:-lazaretto}-api.tls=true
       - traefik.http.routers.${SUBDOMAIN:-lazaretto}-api.service=${SUBDOMAIN:-lazaretto}-backend
+      # errors outer, auth inner: oauth2-errors must sit outside oauth2-auth
+      # so it can catch the 401 forwardAuth short-circuits with — reversed,
+      # that 401 would hit the browser directly with no redirect to sign-in
+      # (see apps/third-party/uptime-kuma/compose.yaml's identical ordering
+      # note). Both sides are ${SUBDOMAIN}-templated: this invocation's own
+      # oauth2-proxy-${SUBDOMAIN:-lazaretto} instance (infra/edge/
+      # oauth2-proxy/compose.yaml) is what actually answers for THIS
+      # router's host, not a fixed shared one.
+      - traefik.http.routers.${SUBDOMAIN:-lazaretto}-api.middlewares=oauth2-errors-${SUBDOMAIN:-lazaretto},oauth2-auth-${SUBDOMAIN:-lazaretto}
 
   lazaretto-frontend:
     image: ghcr.io/quarantineal/lazaretto-frontend:${LAZARETTO_VERSION:-CHANGEME}
@@ -72,6 +97,14 @@ services:
       - traefik.http.routers.${SUBDOMAIN:-lazaretto}.rule=Host(`${SUBDOMAIN:-lazaretto}.${DOMAIN}`)
       - traefik.http.routers.${SUBDOMAIN:-lazaretto}.entrypoints=websecure
       - traefik.http.routers.${SUBDOMAIN:-lazaretto}.tls=true
+      # Explicit low priority: this router's bare Host() rule would
+      # otherwise also match /oauth2/* paths on this host. It must lose to
+      # THIS invocation's own oauth2-proxy-${SUBDOMAIN:-lazaretto} router
+      # (priority=100, PathPrefix `/oauth2/`, infra/edge/oauth2-proxy/
+      # compose.yaml) or sign-in/callback requests would be swallowed here
+      # instead.
+      - traefik.http.routers.${SUBDOMAIN:-lazaretto}.priority=10
+      - traefik.http.routers.${SUBDOMAIN:-lazaretto}.middlewares=oauth2-errors-${SUBDOMAIN:-lazaretto},oauth2-auth-${SUBDOMAIN:-lazaretto}
       - traefik.http.routers.${SUBDOMAIN:-lazaretto}.service=${SUBDOMAIN:-lazaretto}-frontend
 
 networks:

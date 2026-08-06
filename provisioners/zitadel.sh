@@ -4,12 +4,59 @@
 # PAT auth — confirmed against zitadel/zitadel's own .proto sources; see
 # docs/architecture.md's Phase 3 notes).
 #
-# Usage: provisioners/zitadel.sh <repo_root> <env> <plaintext_secrets_file> <name>
-#   <name>  a catalog.yaml app name whose needs_oidc is true (e.g. "uptime-kuma")
+# Not invoked directly by CI or by hand — `quarantine start` calls the
+# default ("ensure") mode, and `quarantine app add-redirect`/
+# `remove-redirect` (bin/quarantine) call the two redirect modes. Both
+# layers decrypt secrets and validate the app name/needs_oidc flag before
+# reaching this script; invoking it standalone (e.g. for debugging) still
+# works with a manually-decrypted plaintext file, per its own usage below.
+#
+# Usage:
+#   provisioners/zitadel.sh <repo_root> <env> <plaintext_secrets_file> <name>
+#       Default ("ensure") mode: create-or-heal a Zitadel Application for
+#       catalog app <name> (e.g. "uptime-kuma"), matching this platform's
+#       one-Application-per-catalog-app model. Every catalog app still uses
+#       exactly this — nothing below changes for them.
+#
+#   provisioners/zitadel.sh add-redirect <repo_root> <env> <plaintext_secrets_file> <canonical_name> <redirect_uri>
+#   provisioners/zitadel.sh remove-redirect <repo_root> <env> <plaintext_secrets_file> <canonical_name> <redirect_uri>
+#       Shared-Application mode: add or remove one redirect URI (and its
+#       derived postLogoutRedirectUri) on <canonical_name>'s ALREADY-EXISTING
+#       Application, instead of creating a new per-invocation Application.
+#       <canonical_name> is the real catalog.yaml name (e.g. "lazaretto"),
+#       never a "pr-<n>-<app>" name — there is no such Application under
+#       this mode, so a PR-shaped name here just fails the ListApplications
+#       lookup below with a clear "no Zitadel application named ... found"
+#       error rather than silently doing the wrong thing. Built for
+#       lazaretto's PR sandboxes: every PR sandbox and the persistent
+#       deployment share ONE Application (one client_id/secret, no per-PR
+#       secret churn, no per-PR Application left behind by a closed PR that
+#       never gets torn down — see lazaretto's own
+#       docs/USER_MANAGEMENT_OIDC_ZITADEL.md, "PR preview links" section,
+#       for the full rationale). Only lazaretto uses this today; a future
+#       app that's also PR-sandboxed and wants the same treatment would call
+#       `quarantine app add-redirect`/`remove-redirect` the same way, keyed
+#       on ITS OWN canonical name — see docs/adding-oidc-to-your-app.md.
+#
+#       Zitadel's ApplicationService has no per-URI add/remove RPC — only
+#       UpdateApplication, which replaces the WHOLE redirectUris (and
+#       postLogoutRedirectUris) list per call (confirmed against Zitadel's
+#       own API reference — no PatchApplication method exists). This mode
+#       therefore does a read-modify-write, serialized with flock, keyed on
+#       the Application's id so two PR open/close events racing on the same
+#       Application can't lose an update to each other. The lock file lives
+#       under <repo_root>/.quarantine-locks/ — this ONLY serializes calls
+#       that share that path, which requires <repo_root> to be the same
+#       host-persistent, bind-mounted checkout every invocation runs
+#       against (true for the CI runner pool's /opt/quarantine/repo mount;
+#       would NOT hold if a caller ever ran this against a fresh per-job
+#       checkout with no shared filesystem).
 #
 # All apps share one Zitadel project ("quarantine-apps"), each as its own
-# OIDC application within it — one org, one project, one app-per-catalog-app,
-# matching this platform's single-tenant deployment model.
+# OIDC application within it — one org, one project, one app-per-catalog-app
+# (or, under the shared-Application mode above, one app per catalog app
+# PLUS every PR sandbox of that same app), matching this platform's
+# single-tenant deployment model.
 #
 # Every Zitadel API call runs inside a throwaway container attached to the
 # `edge` docker network, talking to zitadel-api over plain internal HTTP
@@ -36,20 +83,32 @@ REPO_ROOT_SELF="$(cd -P "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd)"
 source "${REPO_ROOT_SELF}/lib/common.sh"
 
 require_bash4
-require_cmd docker sops yq
+require_cmd docker sops yq flock
 
-if [[ $# -ne 4 ]]; then
-  die "usage: provisioners/zitadel.sh <repo_root> <env> <plaintext_secrets_file> <name>"
+# --- mode + argument parsing -------------------------------------------------
+MODE="ensure"
+if [[ "${1:-}" == "add-redirect" || "${1:-}" == "remove-redirect" ]]; then
+  MODE="$1"
+  shift
 fi
 
-repo_root="$1"
-env="$2"
-plaintext_file="$3"
-name="$4"
+redirect_uri=""
+if [[ "$MODE" == "ensure" ]]; then
+  if [[ $# -ne 4 ]]; then
+    die "usage: provisioners/zitadel.sh <repo_root> <env> <plaintext_secrets_file> <name>"
+  fi
+  repo_root="$1" env="$2" plaintext_file="$3" name="$4"
+else
+  if [[ $# -ne 5 ]]; then
+    die "usage: provisioners/zitadel.sh ${MODE} <repo_root> <env> <plaintext_secrets_file> <canonical_name> <redirect_uri>"
+  fi
+  repo_root="$1" env="$2" plaintext_file="$3" name="$4" redirect_uri="$5"
+  [[ -n "$redirect_uri" ]] || die "${MODE}: redirect_uri must not be empty"
+fi
 
 [[ -f "$plaintext_file" ]] || die "plaintext secrets file not found: $plaintext_file"
 # Same gate as postgres.sh, for the same reason: this script is directly
-# invocable with a bare 4th argument, and `name` ends up embedded in JSON
+# invocable with a bare name argument, and `name` ends up embedded in JSON
 # request bodies below.
 [[ "$name" =~ ^[a-z][a-z0-9-]*$ ]] \
   || die "invalid name '${name}': lowercase letters, digits, hyphens only, must start with a letter"
@@ -137,6 +196,80 @@ else
   log "using existing Zitadel project '${PROJECT_NAME}' (${project_id})"
 fi
 
+# A redirectUris entry is always an /oauth2/callback URL; Zitadel's
+# end_session_endpoint checks post_logout_redirect_uri against the
+# SEPARATE postLogoutRedirectUris list, not redirectUris (confirmed against
+# Zitadel's own end_session_endpoint docs) — derive the bare origin from
+# the same URI rather than taking a second one from callers.
+oauth2_callback_to_origin() {
+  printf '%s' "${1%/oauth2/callback}"
+}
+
+# =============================================================================
+# add-redirect / remove-redirect: shared-Application redirect-URI
+# read-modify-write. Exits before reaching the "ensure" (create-or-heal)
+# logic below, which only the default mode uses.
+# =============================================================================
+if [[ "$MODE" == "add-redirect" || "$MODE" == "remove-redirect" ]]; then
+  find_app_body="$(printf '{"filters":[{"projectIdFilter":{"projectId":"%s"}},{"nameFilter":{"name":"%s"}}]}' "$project_id" "$name")"
+  find_app_response="$(zitadel_call POST /zitadel.application.v2.ApplicationService/ListApplications "$find_app_body")" \
+    || die "failed to list Zitadel applications for project '${PROJECT_NAME}'"
+  app_id="$(printf '%s' "$find_app_response" | yq -p json '.applications[0].applicationId')"
+  [[ -n "$app_id" && "$app_id" != "null" ]] \
+    || die "no Zitadel application named '${name}' found in project '${PROJECT_NAME}' — run the default (ensure) mode for '${name}' first; ${MODE} only ever modifies an existing Application, never creates one"
+
+  logout_redirect_uri="$(oauth2_callback_to_origin "$redirect_uri")"
+
+  lock_dir="${repo_root}/.quarantine-locks"
+  mkdir -p "$lock_dir"
+  lock_file="${lock_dir}/zitadel-app-${app_id}.lock"
+
+  log "${MODE}: waiting for lock on Zitadel application '${name}' (${app_id})"
+  (
+    flock -w 30 9 || die "timed out waiting for the lock on Zitadel application '${name}' (${app_id}) — another add-redirect/remove-redirect call is stuck holding it"
+
+    # Re-fetch INSIDE the lock: the ListApplications call above (before the
+    # lock was held) may already be stale if another add-redirect/
+    # remove-redirect call for this same application ran in between.
+    locked_get_response="$(zitadel_call POST /zitadel.application.v2.ApplicationService/ListApplications "$find_app_body")" \
+      || die "failed to re-fetch Zitadel application '${name}' (${app_id}) under lock"
+    current_redirects_json="$(printf '%s' "$locked_get_response" | yq -p json -o json '.applications[0].oidcConfiguration.redirectUris // []')"
+    current_logout_redirects_json="$(printf '%s' "$locked_get_response" | yq -p json -o json '.applications[0].oidcConfiguration.postLogoutRedirectUris // []')"
+
+    if [[ "$MODE" == "add-redirect" ]]; then
+      new_redirects_json="$(printf '%s' "$current_redirects_json" | yq -p json -o json ". + [\"${redirect_uri}\"] | unique" -)"
+      new_logout_redirects_json="$(printf '%s' "$current_logout_redirects_json" | yq -p json -o json ". + [\"${logout_redirect_uri}\"] | unique" -)"
+      log "add-redirect: adding ${redirect_uri} to '${name}' (${app_id})"
+    else
+      new_redirects_json="$(printf '%s' "$current_redirects_json" | yq -p json -o json "[.[] | select(. != \"${redirect_uri}\")]" -)"
+      new_logout_redirects_json="$(printf '%s' "$current_logout_redirects_json" | yq -p json -o json "[.[] | select(. != \"${logout_redirect_uri}\")]" -)"
+      log "remove-redirect: removing ${redirect_uri} from '${name}' (${app_id})"
+    fi
+
+    update_body="$(cat <<JSON
+{
+  "applicationId": "${app_id}",
+  "projectId": "${project_id}",
+  "oidcConfiguration": {
+    "redirectUris": ${new_redirects_json},
+    "postLogoutRedirectUris": ${new_logout_redirects_json}
+  }
+}
+JSON
+)"
+    zitadel_call POST /zitadel.application.v2.ApplicationService/UpdateApplication "$update_body" \
+      || die "UpdateApplication failed for '${name}' (${app_id})"
+    log "${MODE} succeeded for '${name}' (${app_id})"
+  ) 9>"$lock_file"
+
+  exit 0
+fi
+
+# =============================================================================
+# ensure (default): create-or-heal, unchanged from before add-redirect/
+# remove-redirect existed.
+# =============================================================================
+
 # --- if already provisioned, we're done -------------------------------------
 client_id_key=".apps[\"${name}\"].oidc_client_id"
 client_secret_key=".apps[\"${name}\"].oidc_client_secret"
@@ -152,14 +285,21 @@ redirect_uri_count="$(yq eval "[.apps[] | select(.name == \"${name}\") | .oidc_r
 (( redirect_uri_count > 0 )) || die "'${name}' has no oidc_redirect_uris in catalog.yaml"
 
 declare -a redirect_uris=()
+declare -a logout_redirect_uris=()
 while IFS= read -r uri; do
   [[ -z "$uri" ]] && continue
-  redirect_uris+=("${uri//\$\{DOMAIN\}/$DOMAIN}")
+  resolved_uri="${uri//\$\{DOMAIN\}/$DOMAIN}"
+  redirect_uris+=("$resolved_uri")
+  logout_redirect_uris+=("$(oauth2_callback_to_origin "$resolved_uri")")
 done < <(yq eval ".apps[] | select(.name == \"${name}\") | .oidc_redirect_uris[]" "$CATALOG_FILE")
 
 # Built via yq's own YAML->JSON conversion (correct JSON-escaping for free)
 # rather than hand-quoting each URI into a JSON array string.
 redirect_uris_json="$(printf -- '- %s\n' "${redirect_uris[@]}" | yq -o json -)"
+# unique: catalog.yaml lists exactly one redirect URI per app today, so
+# there's nothing to actually dedupe yet — cheap insurance against a future
+# entry with multiple hosts whose callback URIs share a bare origin.
+logout_redirect_uris_json="$(printf -- '- %s\n' "${logout_redirect_uris[@]}" | yq -o json - | yq -p json -o json 'unique' -)"
 
 # --- defensive: app may already exist without a persisted client_id --------
 # (e.g. a prior run created the Zitadel application but was killed before
@@ -201,6 +341,7 @@ create_app_body="$(cat <<JSON
   "name": "${name}",
   "oidcConfiguration": {
     "redirectUris": ${redirect_uris_json},
+    "postLogoutRedirectUris": ${logout_redirect_uris_json},
     "responseTypes": ["OIDC_RESPONSE_TYPE_CODE"],
     "grantTypes": ["OIDC_GRANT_TYPE_AUTHORIZATION_CODE", "OIDC_GRANT_TYPE_REFRESH_TOKEN"],
     "applicationType": "OIDC_APP_TYPE_WEB",
