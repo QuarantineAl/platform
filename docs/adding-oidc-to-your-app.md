@@ -214,6 +214,21 @@ every future first-party app should be able to just follow it.
   from an env var your app's own compose service sets (Lazaretto's
   backend reads `ZITADEL_ISSUER_URL`), never a literal string in your
   app's own source.
+- **Exclude your own Docker healthcheck endpoint from whatever gates every
+  other route.** A container healthcheck (e.g. `wget -qO- http://
+  127.0.0.1:<port>/health` in your app's own `compose.yaml`) runs *inside*
+  the container and never goes through Traefik — it carries no forwarded
+  identity and never will. If your backend applies its JWT-verification
+  middleware/guard globally with no carve-out, `AUTH_MODE=required` 401s
+  the healthcheck itself: most HTTP clients (`wget` included) treat any
+  4xx as a failure, so Docker reports a perfectly healthy container as
+  unhealthy forever — which then also breaks `wait_healthy()` in every
+  future deploy that waits on it. Hit exactly this onboarding Lazaretto:
+  the container booted and served real requests fine the whole time, but
+  never left "unhealthy" until `/health` was excluded (see
+  `backend/src/app.module.ts`'s `AppModule.configure()` in the lazaretto
+  repo for the fix). Nothing else needs a carve-out — only the one path
+  your own compose file's healthcheck actually hits.
 
 **Lazaretto's backend is the reference implementation of this contract —
 link to it, don't duplicate it.** See `backend/src/auth/auth.service.ts`
