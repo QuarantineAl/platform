@@ -273,7 +273,12 @@ secrets_set() {
   [[ -n "$sops_path" ]] || die "could not resolve a sops path for key '${key}'"
 
   value_json="\"$(_json_escape_string "$value")\""
-  SOPS_AGE_KEY_FILE="$age_key" sops --set --config "${repo_root}/.sops.yaml" "${sops_path} ${value_json}" "$enc_file" >/dev/null
+  # --config MUST precede --set: reversed, sops's flag parser swallows
+  # --config as --set's own value instead of a separate flag, then treats
+  # everything after as stray positional arguments ("More than one
+  # positional argument provided" / "Invalid --set format" — verified
+  # empirically; --set's own docs don't call out the ordering requirement).
+  SOPS_AGE_KEY_FILE="$age_key" sops --config "${repo_root}/.sops.yaml" --set "${sops_path} ${value_json}" "$enc_file" >/dev/null
 }
 
 # secrets_get <plaintext_file> <yaml-path> — read one key out of an already
