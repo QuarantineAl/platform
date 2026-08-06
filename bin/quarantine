@@ -851,9 +851,21 @@ _require_oidc_app() {
 # PR-sandboxed app that also sets needs_oidc: true in catalog.yaml gets this
 # for free, with no workflow edit, by calling these two subcommands with its
 # own name.
+#
+# Deliberately does NOT call acquire_lock: that lock is whole-environment
+# and non-blocking (flock -n, dies immediately rather than waiting), meant
+# to protect manifest.yaml/secrets.sops.yaml read-modify-write cycles —
+# neither of which these two subcommands touch (they only read-only decrypt
+# secrets for the PAT, never call secrets_set here). zitadel.sh's own
+# add-redirect/remove-redirect modes already serialize the thing that
+# actually needs it — the Application's redirect list — with a WAITING
+# flock scoped to just that Application. Taking acquire_lock here as well
+# would defeat that: two PR open/close events racing on the same app would
+# have the second one die outright ("another quarantine operation is
+# already running") instead of queuing behind zitadel.sh's own lock, the
+# exact race that lock exists to handle gracefully.
 cmd_app_add_redirect() {
   load_config
-  acquire_lock "$QUARANTINE_REPO" "$QUARANTINE_ENV"
   [[ $# -eq 2 ]] || die "usage: quarantine app add-redirect <name> <redirect_uri>"
   local app_name="$1" redirect_uri="$2"
   _require_oidc_app "$app_name"
@@ -868,7 +880,6 @@ cmd_app_add_redirect() {
 
 cmd_app_remove_redirect() {
   load_config
-  acquire_lock "$QUARANTINE_REPO" "$QUARANTINE_ENV"
   [[ $# -eq 2 ]] || die "usage: quarantine app remove-redirect <name> <redirect_uri>"
   local app_name="$1" redirect_uri="$2"
   _require_oidc_app "$app_name"
