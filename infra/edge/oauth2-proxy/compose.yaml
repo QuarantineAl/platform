@@ -178,12 +178,18 @@ services:
       # removed by remove-redirect when it closes.
       OAUTH2_PROXY_REDIRECT_URL: https://${SUBDOMAIN:-lazaretto}.${DOMAIN}/oauth2/callback
       OAUTH2_PROXY_SET_XAUTHREQUEST: "true"
-      # PASS_ (not SET_) is what actually forwards the raw ID token to the
-      # upstream app as `Authorization: Bearer <id_token>` — see the
-      # platform's forwarded-identity contract in
-      # docs/adding-oidc-to-your-app.md for the SET_/PASS_ distinction and
-      # why every first-party app relies on this, not just
-      # X-Auth-Request-*.
+      # SET_ (not PASS_ — an earlier version of this file had that
+      # backwards) is what actually forwards the raw ID token to the
+      # backend as `Authorization: Bearer <id_token>`: this instance never
+      # proxies real traffic itself (UPSTREAMS below is a dummy static
+      # response), Traefik does, calling /oauth2/auth only to validate —
+      # exactly Nginx's auth_request pattern, which is what SET_ targets.
+      # PASS_ only matters when oauth2-proxy itself proxies to the real
+      # upstream. Confirmed live: without SET_, forwardAuth's own check
+      # still passes (this app's access is correctly gated) while zero
+      # Authorization header ever reaches the backend — see the platform's
+      # forwarded-identity contract in docs/adding-oidc-to-your-app.md.
+      OAUTH2_PROXY_SET_AUTHORIZATION_HEADER: "true"
       OAUTH2_PROXY_PASS_AUTHORIZATION_HEADER: "true"
       OAUTH2_PROXY_SKIP_PROVIDER_BUTTON: "true"
       # openid/email/profile: standard claims. resourceowner: Zitadel org

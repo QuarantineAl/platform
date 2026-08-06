@@ -181,13 +181,25 @@ This is the platform's standard contract for every first-party app that
 needs real user identity, not just Lazaretto's. Get this right once here;
 every future first-party app should be able to just follow it.
 
-- **`OAUTH2_PROXY_PASS_AUTHORIZATION_HEADER: "true"`** — not `SET_`. These
-  are two different options that are easy to confuse: `PASS_` forwards
-  the raw ID token to the upstream app as `Authorization: Bearer
-  <id_token>`, on every request. `SET_` is a differently-scoped option
-  that sets a header on an Nginx-`auth_request`-style auth-subrequest
-  *response* — not the request your app actually receives. Only `PASS_`
-  gets your app a token to verify.
+- **`OAUTH2_PROXY_SET_AUTHORIZATION_HEADER: "true"`** — not `PASS_`, the
+  opposite of what an earlier version of this doc said. `PASS_` only
+  matters when oauth2-proxy itself is the reverse proxy sitting in front
+  of your app (`--upstream` pointed at it) — that's not this platform's
+  setup, where `OAUTH2_PROXY_UPSTREAMS: static://202` is a dummy value and
+  Traefik does the actual proxying, calling `/oauth2/auth` only to
+  validate the request, exactly like Nginx's `auth_request` module. `SET_`
+  is what actually matters here: it adds `Authorization: Bearer
+  <id_token>` to `/oauth2/auth`'s own 2xx response, which Traefik's
+  forwardAuth middleware then copies onto the real request via
+  `authResponseHeaders` (already lists `Authorization` in this file's own
+  `oauth2-auth-${SUBDOMAIN}.forwardauth.authResponseHeaders`). Omitting
+  `SET_` fails in the most confusing way possible: forwardAuth's own check
+  still succeeds (your app's *access* is correctly gated), so nothing
+  looks wrong until your app's own JWT verification throws on a `Bearer`
+  header that was never actually sent — confirmed live against Lazaretto:
+  no `Authorization` header ever reached the backend, and its
+  `AuthMiddleware` threw with no logger call at all, so even `docker logs`
+  showed nothing pointing at the cause.
 - **`OAUTH2_PROXY_SCOPE`** must include, at minimum:
   - `openid email profile` — standard claims.
   - `urn:zitadel:iam:user:resourceowner` — the user's Zitadel org id.
