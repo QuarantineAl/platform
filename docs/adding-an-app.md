@@ -27,8 +27,10 @@ from happening.
 | `oidc_redirect_uris` | Redirect URIs registered on the OIDC client. Only present when `needs_oidc` is true. |
 | `notes` | Free-text caveats — surfaced by `quarantine app add` and read by whoever's adding the next app. |
 
-The current (and, at the time of writing, only) entry, quoted verbatim from
-`catalog.yaml`, is the worked example to copy from:
+Uptime Kuma's entry, quoted verbatim from `catalog.yaml`, is the worked
+example to copy from for a single-origin `needs_oidc: true` app (see
+`docs/adding-oidc-to-your-app.md` for the multi-origin shape, worked
+through via the `lazaretto` entry):
 
 ```yaml
   - name: uptime-kuma
@@ -119,7 +121,10 @@ Leave `false` alone if the app genuinely needs neither. Otherwise:
 - **`needs_oidc: true`** — add an `oidc_redirect_uris` list (see the
   uptime-kuma entry above for the shape). `provisioners/zitadel.sh` will
   automatically create the Zitadel project (shared, `quarantine-apps`) and
-  one OIDC application for this entry.
+  one OIDC application for this entry. This catalog flip is only the first
+  step, not the whole thing — see `docs/adding-oidc-to-your-app.md` for the
+  oauth2-proxy consumer block and Traefik middleware wiring the app
+  actually needs to be fronted.
 
 Both provisioners are called automatically by `quarantine start` for every
 manifest app whose catalog record sets the corresponding flag — you never
@@ -141,21 +146,24 @@ kind of secret the app needs:
   so the key is discoverable/documented — but it does **not** need to go in
   `bin/quarantine`'s `REQUIRED_SECRET_KEYS` array, and `quarantine init`
   never sees or generates it.
-- **The app's OIDC client id/secret (`needs_oidc: true`)** — same story.
-  `provisioners/zitadel.sh` persists `.apps["<name>"].oidc_client_id` /
-  `.oidc_client_secret` into `secrets.sops.yaml` the first time it
-  provisions the app (Zitadel only returns the client secret once, at
-  creation). Add matching `CHANGEME-captured-from-zitadel-at-provision-time`
-  placeholder lines to `secrets.example.yaml` (mirroring the uptime-kuma
-  entry) for documentation, but again these are **not** `REQUIRED_SECRET_KEYS`
-  members. What you *do* need to add by hand is the plumbing that gets these
-  two values out of the decrypted secrets file and into the generated
-  `.env` — in `generate_env_file()` in `bin/quarantine`, follow the
-  `uptime_kuma_oidc_id`/`uptime_kuma_oidc_secret` pattern exactly: read both
-  with `secrets_get` (not `req_secret` — they're legitimately empty until
-  the provisioner has run once) and add
-  `OIDC_CLIENT_ID_<APP>`/`OIDC_CLIENT_SECRET_<APP>` `printf` lines so the
-  app's own `compose.yaml` can consume them.
+- **The app's OIDC client id/secret (`needs_oidc: true`)** — nothing to
+  wire, full stop. `provisioners/zitadel.sh` persists
+  `.apps["<name>"].oidc_client_id` / `.oidc_client_secret` into
+  `secrets.sops.yaml` the first time it provisions the app (Zitadel only
+  returns the client secret once, at creation), and `generate_secrets`/
+  `generate_env_file` in `bin/quarantine` both derive their per-app OIDC
+  handling from `catalog.yaml`'s own `needs_oidc` entries — the same way
+  `<APP>_VERSION` is already derived from the manifest, not a hardcoded
+  list. `OIDC_CLIENT_ID_<APP>`/`OIDC_CLIENT_SECRET_<APP>` land in the
+  generated `.env` automatically the moment this catalog entry sets
+  `needs_oidc: true`; nothing in `bin/quarantine` needs touching. Adding
+  matching `CHANGEME-captured-from-zitadel-at-provision-time` placeholder
+  lines to `secrets.example.yaml` under `apps.<name>:` (mirroring the
+  lazaretto/uptime-kuma entries) is good practice for documentation, but
+  optional — these are **not** `REQUIRED_SECRET_KEYS` members, and the key
+  gets created either way. See `docs/adding-oidc-to-your-app.md` for the
+  Traefik/oauth2-proxy side of onboarding a `needs_oidc` app (the
+  `catalog.yaml` redirect URIs above are only half of it).
 - **Any other secret the app needs that has nothing to do with Postgres or
   Zitadel** (its own admin password, an API token, an encryption key it
   generates nowhere else) — there is no provisioner for this, so it has to
