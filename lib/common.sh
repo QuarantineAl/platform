@@ -311,6 +311,33 @@ qcompose() {
     "$@"
 }
 
+# ensure_ghcr_login <plaintext_file>
+# Logs the host's docker daemon into ghcr.io using core.ghcr.pull_username/
+# pull_token, if configured. NOT required (unlike REQUIRED_SECRET_KEYS in
+# bin/quarantine): CI never needs this — deploy-app.yml logs in itself with
+# the ephemeral per-job GITHUB_TOKEN, inside the runner container's own
+# docker context. That login shares the host's image cache (the runner
+# mounts the host's docker.sock) but NOT its stored credentials, so an ad
+# hoc `quarantine start`/`app start` run directly on the host has no
+# credential of its own — confirmed live: "unauthorized" pulling any
+# private ghcr.io/quarantineal/* image. Skips (not dies) when unset, same
+# "legitimately empty until an operator sets it" treatment as
+# core.github_runner.pat.
+ensure_ghcr_login() {
+  local plaintext_file="$1" token username
+  token="$(secrets_get "$plaintext_file" '.core.ghcr.pull_token')"
+  username="$(secrets_get "$plaintext_file" '.core.ghcr.pull_username')"
+
+  if [[ -z "$token" || "$token" == CHANGEME* || -z "$username" || "$username" == CHANGEME* ]]; then
+    log "no GHCR pull token configured (core.ghcr.pull_token) — skipping docker login; pulling private ghcr.io/quarantineal/* images will fail unless the host is already logged in some other way"
+    return 0
+  fi
+
+  printf '%s' "$token" | docker login ghcr.io -u "$username" --password-stdin >/dev/null \
+    || die "docker login to ghcr.io failed with the configured core.ghcr.pull_token — has it expired or been revoked?"
+  log "logged in to ghcr.io as ${username}"
+}
+
 # ---------------------------------------------------------------------------
 # Health gating
 # ---------------------------------------------------------------------------
