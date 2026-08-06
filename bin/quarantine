@@ -456,6 +456,8 @@ cmd_start() {
   wait_healthy "quarantine-zitadel-api"
   wait_healthy "quarantine-zitadel-login"
 
+  "${repo_root}/provisioners/zitadel.sh" ensure-features "$repo_root" "$env" "$plaintext"
+
   log "starting observability"
   qcompose "$env" --profile observability up -d
 
