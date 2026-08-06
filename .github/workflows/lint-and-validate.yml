@@ -12,16 +12,16 @@
 #
 #   2. compose-validate — `docker compose config` against
 #      environments/_template/compose.yaml with every profile flag
-#      (observability, uptime-kuma, portainer), to structurally validate the
-#      assembled compose graph (include: resolution, var interpolation,
-#      profile gating) parses and merges cleanly. This needs *some* value
-#      for every ${VAR} the included fragments reference — those vars only
-#      get real values once `quarantine init`/`start` has generated an
-#      actual environment .env from secrets.sops.yaml, which doesn't exist
-#      in CI — so this step exports dummy placeholder values for each one
-#      into a throwaway --env-file first. This validates shape only: it
-#      does not (and can't, without a live target host) confirm the stack
-#      actually boots, that Traefik gets real certs, or that any
+#      (observability, uptime-kuma, portainer, lazaretto), to structurally
+#      validate the assembled compose graph (include: resolution, var
+#      interpolation, profile gating) parses and merges cleanly. This needs
+#      *some* value for every ${VAR} the included fragments reference —
+#      those vars only get real values once `quarantine init`/`start` has
+#      generated an actual environment .env from secrets.sops.yaml, which
+#      doesn't exist in CI — so this step exports dummy placeholder values
+#      for each one into a throwaway --env-file first. This validates shape
+#      only: it does not (and can't, without a live target host) confirm
+#      the stack actually boots, that Traefik gets real certs, or that any
 #      provisioner/OIDC/DB wiring behaves — see docs/architecture.md for
 #      what's still missing.
 #
@@ -98,10 +98,13 @@ jobs:
           UPTIME_KUMA_VERSION=2.4.0
           OIDC_CLIENT_ID_UPTIME_KUMA=dummy-oidc-client-id
           OIDC_CLIENT_SECRET_UPTIME_KUMA=dummy-oidc-client-secret
+          LAZARETTO_VERSION=dummy
+          OIDC_CLIENT_ID_LAZARETTO=dummy-oidc-client-id
+          OIDC_CLIENT_SECRET_LAZARETTO=dummy-oidc-client-secret
           OAUTH2_PROXY_COOKIE_SECRET=dummy-cookie-secret-value
           EOF
 
-      - name: docker compose config (observability + uptime-kuma + portainer profiles)
+      - name: docker compose config (observability + uptime-kuma + portainer + lazaretto profiles)
         shell: bash
         working-directory: environments/_template
         run: |
@@ -111,5 +114,6 @@ jobs:
             --profile observability \
             --profile uptime-kuma \
             --profile portainer \
+            --profile lazaretto \
             -f compose.yaml \
             config
