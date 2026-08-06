@@ -31,7 +31,9 @@ apps:
     compose_path: apps/first-party/lazaretto/compose.yaml
     subdomain: lazaretto
     needs_db: false
-    needs_oidc: false
+    needs_oidc: true
+    oidc_redirect_uris:
+      - "https://lazaretto.${DOMAIN}/oauth2/callback"
     notes: >-
       Two-origin app: frontend at ${subdomain}.${DOMAIN}, backend/API at
       ${subdomain}-api.${DOMAIN} — the second hostname is hardcoded in the
@@ -39,13 +41,24 @@ apps:
       subdomain field. The frontend image has its API URL baked in at CI
       build time (Vite loads frontend/.env.production, not a build ARG —
       see that file's own Dockerfile comment), pointed at this
-      environment's -api hostname by the calling CI workflow. No native
-      auth (own SQLite, own ARCHITECTURE.md-documented "no auth" gap) —
-      flip needs_oidc to true + front it with oauth2-proxy later, same
-      pattern as uptime-kuma, no lazaretto-side change needed. The same
-      compose fragment is reused for PR sandboxes (pr-<n>-lazaretto),
-      invoked directly rather than via quarantine app add — see
-      docs/runners-and-sandboxing.md.
+      environment's -api hostname by the calling CI workflow. The platform's
+      first multi-origin, PR-sandboxed OIDC consumer: the
+      oauth2-proxy-lazaretto instance (infra/edge/oauth2-proxy/compose.yaml)
+      is ${SUBDOMAIN}-templated (one per open PR sandbox plus the
+      persistent deployment), each sets OAUTH2_PROXY_COOKIE_DOMAINS to the
+      shared parent domain so its cookie is valid across both of that
+      instance's hostnames, and forwardAuth gates both of this app's
+      routers wholesale — no unauthenticated path, unlike uptime-kuma's
+      public/admin split (own ARCHITECTURE.md-documented "no auth" gap this
+      closes). Only the persistent host's callback is registered above —
+      every PR sandbox (pr-<n>-lazaretto, see docs/runners-and-sandboxing.md)
+      shares the ONE Zitadel Application (same client_id/secret) but
+      registers and later deregisters its OWN redirect URI on it via
+      provisioners/zitadel.sh's add-redirect/remove-redirect modes, called
+      from QuarantineAl/.github's pr-sandbox-up.yml/pr-sandbox-down.yml as
+      the sandbox opens/closes. See docs/adding-oidc-to-your-app.md for the
+      full recipe and docs/USER_MANAGEMENT_OIDC_ZITADEL.md (in the lazaretto
+      repo) for the app-side JWT verification this backs.
 
   - name: uptime-kuma
     kind: app

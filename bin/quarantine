@@ -367,12 +367,25 @@ generate_secrets() {
   # — see secrets.example.yaml's own comment on that key -------------------
   for key in \
     '.core.zitadel.provisioner_pat' \
-    '.core.github_runner.pat' \
-    '.apps["uptime-kuma"].oidc_client_id' \
-    '.apps["uptime-kuma"].oidc_client_secret'
+    '.core.github_runner.pat'
   do
     yq eval -i "${key} = \"\"" "$tmp"
   done
+
+  # Every catalog app with needs_oidc:true gets its own deferred
+  # apps.<name>.oidc_client_id/oidc_client_secret pair — driven off
+  # catalog.yaml, not a hardcoded per-app list (this used to only cover
+  # uptime-kuma). Same reasoning as the version_vars derivation in
+  # generate_env_file below: a new needs_oidc app needs this function
+  # untouched.
+  local oidc_apps oidc_app
+  oidc_apps="$(yq eval '.apps[] | select(.needs_oidc == true) | .name' "${repo_root}/catalog.yaml")" \
+    || die "failed to read catalog.yaml for needs_oidc apps — check for syntax errors"
+  while IFS= read -r oidc_app; do
+    [[ -z "$oidc_app" ]] && continue
+    yq eval -i ".apps[\"${oidc_app}\"].oidc_client_id = \"\"" "$tmp"
+    yq eval -i ".apps[\"${oidc_app}\"].oidc_client_secret = \"\"" "$tmp"
+  done <<< "$oidc_apps"
 
   # --filename-override tells sops which path to match .sops.yaml's
   # creation_rules against — sops otherwise matches against the path of
@@ -532,7 +545,7 @@ generate_env_file() {
 
   local cf_token pg_admin_password
   local zitadel_masterkey zitadel_admin_password zitadel_db_password
-  local oauth2_cookie_secret uptime_kuma_oidc_id uptime_kuma_oidc_secret
+  local oauth2_cookie_secret
   local github_runner_pat
 
   cf_token="$(req_secret "$plaintext" '.core.traefik.cloudflare_api_token' 'Cloudflare API token')"
@@ -541,11 +554,6 @@ generate_env_file() {
   zitadel_admin_password="$(req_secret "$plaintext" '.core.zitadel.admin_password' 'Zitadel admin password')"
   zitadel_db_password="$(req_secret "$plaintext" '.core.zitadel.db_password' "Zitadel's own Postgres role password")"
   oauth2_cookie_secret="$(req_secret "$plaintext" '.core.oauth2_proxy.cookie_secret' 'oauth2-proxy cookie secret')"
-
-  # OIDC client id/secret are legitimately empty until provisioners/zitadel.sh
-  # runs — read directly, not via req_secret.
-  uptime_kuma_oidc_id="$(secrets_get "$plaintext" '.apps["uptime-kuma"].oidc_client_id')"
-  uptime_kuma_oidc_secret="$(secrets_get "$plaintext" '.apps["uptime-kuma"].oidc_client_secret')"
 
   # Legitimately empty for an environment with no runner (e.g. a client
   # install) — read directly, not via req_secret. See
@@ -570,9 +578,6 @@ generate_env_file() {
 
     printf 'OAUTH2_PROXY_COOKIE_SECRET=%s\n' "$oauth2_cookie_secret"
 
-    printf 'OIDC_CLIENT_ID_UPTIME_KUMA=%s\n' "$uptime_kuma_oidc_id"
-    printf 'OIDC_CLIENT_SECRET_UPTIME_KUMA=%s\n' "$uptime_kuma_oidc_secret"
-
     printf 'GH_RUNNER_PAT=%s\n' "$github_runner_pat"
     # Harmless to set even for an environment whose compose.yaml doesn't
     # include infra/ci/github-runner/ at all — an unreferenced .env var is
@@ -580,6 +585,24 @@ generate_env_file() {
     # this label (see docs/runners-and-sandboxing.md).
     printf 'RUNNER_LABELS=self-hosted,quarantine-%s\n' "$env"
   } > "$tmp"
+
+  # OIDC_CLIENT_ID_<APP>/OIDC_CLIENT_SECRET_<APP> pairs are computed from
+  # catalog.yaml's OWN needs_oidc entries (not a hardcoded per-app list —
+  # this used to only cover uptime-kuma) — same reasoning as version_vars
+  # right below: a new needs_oidc app needs this function untouched.
+  # Values are legitimately empty until provisioners/zitadel.sh has run
+  # once for that app — read directly via secrets_get, not req_secret.
+  local oidc_apps oidc_app oidc_id oidc_secret oidc_var
+  oidc_apps="$(yq eval '.apps[] | select(.needs_oidc == true) | .name' "${repo_root}/catalog.yaml")" \
+    || die "failed to read catalog.yaml for needs_oidc apps — check for syntax errors"
+  while IFS= read -r oidc_app; do
+    [[ -z "$oidc_app" ]] && continue
+    oidc_id="$(secrets_get "$plaintext" ".apps[\"${oidc_app}\"].oidc_client_id")"
+    oidc_secret="$(secrets_get "$plaintext" ".apps[\"${oidc_app}\"].oidc_client_secret")"
+    oidc_var="$(printf '%s' "$oidc_app" | tr '[:lower:]-' '[:upper:]_')"
+    printf 'OIDC_CLIENT_ID_%s=%s\n' "$oidc_var" "$oidc_id" >> "$tmp"
+    printf 'OIDC_CLIENT_SECRET_%s=%s\n' "$oidc_var" "$oidc_secret" >> "$tmp"
+  done <<< "$oidc_apps"
 
   # Version vars are computed from the manifest's OWN app list (not a
   # hardcoded name list) and explicitly unset before manifest_export_versions
@@ -802,6 +825,73 @@ cmd_app_remove() {
   log "remember to git add/commit/push environments/${QUARANTINE_ENV}/manifest.yaml"
 }
 
+# _require_oidc_app <name> — dies unless <name> is a catalog app with
+# needs_oidc: true. Shared gate for add-redirect/remove-redirect: both only
+# ever make sense against an app whose Zitadel Application already exists
+# (provisioners/zitadel.sh's "ensure" mode creates that the first time
+# `quarantine start` reconciles it), and this is the one check that keeps a
+# typo'd or non-OIDC app name from reaching zitadel.sh at all, rather than
+# failing there with a less obvious message.
+_require_oidc_app() {
+  local app_name="$1" needs_oidc
+  needs_oidc="$(catalog_field "$app_name" needs_oidc)"
+  [[ "$needs_oidc" == "true" ]] \
+    || die "'${app_name}' is not a needs_oidc:true catalog app — see docs/adding-oidc-to-your-app.md"
+}
+
+# cmd_app_add_redirect / cmd_app_remove_redirect — the CI-facing entry point
+# for a PR sandbox's own redirect URI (see provisioners/zitadel.sh's
+# add-redirect/remove-redirect modes for the actual Zitadel mechanics: a
+# flock-serialized read-modify-write against the app's ALREADY-EXISTING,
+# shared Application, since Zitadel has no per-URI add/remove RPC). This is
+# the layer a CI workflow actually calls — `pr-sandbox-up.yml`/
+# `pr-sandbox-down.yml` in QuarantineAl/.github never invoke
+# provisioners/*.sh directly, same as `quarantine start` never does either.
+# Generalized over any needs_oidc app, not hardcoded to lazaretto: a future
+# PR-sandboxed app that also sets needs_oidc: true in catalog.yaml gets this
+# for free, with no workflow edit, by calling these two subcommands with its
+# own name.
+#
+# Deliberately does NOT call acquire_lock: that lock is whole-environment
+# and non-blocking (flock -n, dies immediately rather than waiting), meant
+# to protect manifest.yaml/secrets.sops.yaml read-modify-write cycles —
+# neither of which these two subcommands touch (they only read-only decrypt
+# secrets for the PAT, never call secrets_set here). zitadel.sh's own
+# add-redirect/remove-redirect modes already serialize the thing that
+# actually needs it — the Application's redirect list — with a WAITING
+# flock scoped to just that Application. Taking acquire_lock here as well
+# would defeat that: two PR open/close events racing on the same app would
+# have the second one die outright ("another quarantine operation is
+# already running") instead of queuing behind zitadel.sh's own lock, the
+# exact race that lock exists to handle gracefully.
+cmd_app_add_redirect() {
+  load_config
+  [[ $# -eq 2 ]] || die "usage: quarantine app add-redirect <name> <redirect_uri>"
+  local app_name="$1" redirect_uri="$2"
+  _require_oidc_app "$app_name"
+
+  local plaintext
+  plaintext="$(secrets_decrypt_to_tmpfs "$QUARANTINE_REPO" "$QUARANTINE_ENV")"
+  trap_add "shred_file '${plaintext}'"
+
+  "${QUARANTINE_REPO}/provisioners/zitadel.sh" add-redirect \
+    "$QUARANTINE_REPO" "$QUARANTINE_ENV" "$plaintext" "$app_name" "$redirect_uri"
+}
+
+cmd_app_remove_redirect() {
+  load_config
+  [[ $# -eq 2 ]] || die "usage: quarantine app remove-redirect <name> <redirect_uri>"
+  local app_name="$1" redirect_uri="$2"
+  _require_oidc_app "$app_name"
+
+  local plaintext
+  plaintext="$(secrets_decrypt_to_tmpfs "$QUARANTINE_REPO" "$QUARANTINE_ENV")"
+  trap_add "shred_file '${plaintext}'"
+
+  "${QUARANTINE_REPO}/provisioners/zitadel.sh" remove-redirect \
+    "$QUARANTINE_REPO" "$QUARANTINE_ENV" "$plaintext" "$app_name" "$redirect_uri"
+}
+
 # ---------------------------------------------------------------------------
 # status
 # ---------------------------------------------------------------------------
@@ -927,6 +1017,15 @@ Commands:
   app add <name> [--version V]
                           Add an app from catalog.yaml to this environment.
   app remove <name>       Remove an app from this environment's manifest.
+  app add-redirect <name> <redirect_uri>
+                          Add one redirect URI to a needs_oidc app's shared
+                          Zitadel Application (e.g. a PR sandbox's own
+                          callback URL). Never creates an Application —
+                          'quarantine start' must have provisioned <name>
+                          first.
+  app remove-redirect <name> <redirect_uri>
+                          Remove one redirect URI added via add-redirect
+                          (e.g. when a PR sandbox closes).
   status                  Show container status for this environment.
   version                 Print the version of the repo checkout on disk.
   upgrade                 Fetch + fast-forward-only merge origin/main, then start.
@@ -949,6 +1048,8 @@ main() {
       case "$subcmd" in
         add) cmd_app_add "$@" ;;
         remove) cmd_app_remove "$@" ;;
+        add-redirect) cmd_app_add_redirect "$@" ;;
+        remove-redirect) cmd_app_remove_redirect "$@" ;;
         *) usage >&2; die "unknown 'app' subcommand: ${subcmd}" ;;
       esac
       ;;
