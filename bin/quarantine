@@ -481,6 +481,8 @@ cmd_start() {
     qcompose "$env" up -d runner
   fi
 
+  ensure_ghcr_login "$plaintext"
+
   reconcile_apps "$repo_root" "$env" "$manifest" "$plaintext"
 
   log "quarantine start complete for environment '${env}'"
