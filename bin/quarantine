@@ -825,6 +825,62 @@ cmd_app_remove() {
   log "remember to git add/commit/push environments/${QUARANTINE_ENV}/manifest.yaml"
 }
 
+# _require_oidc_app <name> — dies unless <name> is a catalog app with
+# needs_oidc: true. Shared gate for add-redirect/remove-redirect: both only
+# ever make sense against an app whose Zitadel Application already exists
+# (provisioners/zitadel.sh's "ensure" mode creates that the first time
+# `quarantine start` reconciles it), and this is the one check that keeps a
+# typo'd or non-OIDC app name from reaching zitadel.sh at all, rather than
+# failing there with a less obvious message.
+_require_oidc_app() {
+  local app_name="$1" needs_oidc
+  needs_oidc="$(catalog_field "$app_name" needs_oidc)"
+  [[ "$needs_oidc" == "true" ]] \
+    || die "'${app_name}' is not a needs_oidc:true catalog app — see docs/adding-oidc-to-your-app.md"
+}
+
+# cmd_app_add_redirect / cmd_app_remove_redirect — the CI-facing entry point
+# for a PR sandbox's own redirect URI (see provisioners/zitadel.sh's
+# add-redirect/remove-redirect modes for the actual Zitadel mechanics: a
+# flock-serialized read-modify-write against the app's ALREADY-EXISTING,
+# shared Application, since Zitadel has no per-URI add/remove RPC). This is
+# the layer a CI workflow actually calls — `pr-sandbox-up.yml`/
+# `pr-sandbox-down.yml` in QuarantineAl/.github never invoke
+# provisioners/*.sh directly, same as `quarantine start` never does either.
+# Generalized over any needs_oidc app, not hardcoded to lazaretto: a future
+# PR-sandboxed app that also sets needs_oidc: true in catalog.yaml gets this
+# for free, with no workflow edit, by calling these two subcommands with its
+# own name.
+cmd_app_add_redirect() {
+  load_config
+  acquire_lock "$QUARANTINE_REPO" "$QUARANTINE_ENV"
+  [[ $# -eq 2 ]] || die "usage: quarantine app add-redirect <name> <redirect_uri>"
+  local app_name="$1" redirect_uri="$2"
+  _require_oidc_app "$app_name"
+
+  local plaintext
+  plaintext="$(secrets_decrypt_to_tmpfs "$QUARANTINE_REPO" "$QUARANTINE_ENV")"
+  trap_add "shred_file '${plaintext}'"
+
+  "${QUARANTINE_REPO}/provisioners/zitadel.sh" add-redirect \
+    "$QUARANTINE_REPO" "$QUARANTINE_ENV" "$plaintext" "$app_name" "$redirect_uri"
+}
+
+cmd_app_remove_redirect() {
+  load_config
+  acquire_lock "$QUARANTINE_REPO" "$QUARANTINE_ENV"
+  [[ $# -eq 2 ]] || die "usage: quarantine app remove-redirect <name> <redirect_uri>"
+  local app_name="$1" redirect_uri="$2"
+  _require_oidc_app "$app_name"
+
+  local plaintext
+  plaintext="$(secrets_decrypt_to_tmpfs "$QUARANTINE_REPO" "$QUARANTINE_ENV")"
+  trap_add "shred_file '${plaintext}'"
+
+  "${QUARANTINE_REPO}/provisioners/zitadel.sh" remove-redirect \
+    "$QUARANTINE_REPO" "$QUARANTINE_ENV" "$plaintext" "$app_name" "$redirect_uri"
+}
+
 # ---------------------------------------------------------------------------
 # status
 # ---------------------------------------------------------------------------
@@ -950,6 +1006,15 @@ Commands:
   app add <name> [--version V]
                           Add an app from catalog.yaml to this environment.
   app remove <name>       Remove an app from this environment's manifest.
+  app add-redirect <name> <redirect_uri>
+                          Add one redirect URI to a needs_oidc app's shared
+                          Zitadel Application (e.g. a PR sandbox's own
+                          callback URL). Never creates an Application —
+                          'quarantine start' must have provisioned <name>
+                          first.
+  app remove-redirect <name> <redirect_uri>
+                          Remove one redirect URI added via add-redirect
+                          (e.g. when a PR sandbox closes).
   status                  Show container status for this environment.
   version                 Print the version of the repo checkout on disk.
   upgrade                 Fetch + fast-forward-only merge origin/main, then start.
@@ -972,6 +1037,8 @@ main() {
       case "$subcmd" in
         add) cmd_app_add "$@" ;;
         remove) cmd_app_remove "$@" ;;
+        add-redirect) cmd_app_add_redirect "$@" ;;
+        remove-redirect) cmd_app_remove_redirect "$@" ;;
         *) usage >&2; die "unknown 'app' subcommand: ${subcmd}" ;;
       esac
       ;;

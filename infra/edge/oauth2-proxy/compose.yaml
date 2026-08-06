@@ -17,21 +17,47 @@
 # secret (each instance's cookie NAME must still be unique the moment its
 # cookie domain broadens past its own single host — see Lazaretto below).
 #
-# Full self-service recipe — single-origin AND multi-origin consumers, the
-# forwarded-identity contract every first-party app's backend must honor,
-# and troubleshooting — lives in docs/adding-oidc-to-your-app.md; read
-# that before adding a new consumer here. Short version: copy the
-# Lazaretto block below for a multi-origin app (frontend + API on sibling
-# subdomains) or the Uptime Kuma block for a single-origin one; rename
-# every `-<app>` suffix (service key, container_name, profile, env var
-# names, router/middleware names) to the new app's name; point
+# Lazaretto's own block is further templated by ${SUBDOMAIN}, not just
+# hardcoded to "lazaretto": unlike Uptime Kuma, Lazaretto is also
+# PR-sandboxed (docs/runners-and-sandboxing.md) — the SAME compose file is
+# brought up again, alongside apps/first-party/lazaretto/compose.yaml, for
+# every open PR sandbox (see QuarantineAl/.github's pr-sandbox-up.yml),
+# each with its own SUBDOMAIN (pr-<n>-lazaretto). So many instances of this
+# ONE block can run concurrently on the same host. container_name and every
+# Traefik router/service/middleware name derive from ${SUBDOMAIN} so
+# concurrent instances never collide; forwardauth.address deliberately
+# targets the CONTAINER NAME rather than the (necessarily static) compose
+# service key — Docker's embedded DNS would otherwise round-robin between
+# every concurrently-running instance sharing that one service-name alias
+# on the shared external `edge` network, since a compose service key can't
+# itself be ${VAR}-templated. OAUTH2_PROXY_COOKIE_NAME, by contrast, is
+# deliberately NOT templated — every Lazaretto instance (persistent +
+# every open PR sandbox) shares the same cookie name and the same
+# Application/client_id (see provisioners/zitadel.sh's add-redirect/
+# remove-redirect modes), so a session cookie set by one instance is valid
+# on every other Lazaretto instance too, under the shared parent domain —
+# SSO-like bleed across the persistent deployment and every open PR
+# sandbox, not a real vulnerability (the underlying identity check is
+# still a real Zitadel session either way) but a broader scope than a
+# plain per-host cookie would give.
+#
+# Full self-service recipe — single-origin, multi-origin, and PR-sandboxed
+# consumers, the forwarded-identity contract every first-party app's
+# backend must honor, and the CI wiring that calls add-redirect/
+# remove-redirect — lives in docs/adding-oidc-to-your-app.md; read that
+# before adding a new consumer here.
+#
+# Adding a THIRD consumer: copy the Uptime Kuma block below (a single,
+# never-sandboxed instance is the simpler starting shape), rename every
+# `-<app>` suffix (service key, container_name, profiles, env var names,
+# router/middleware names) to the new app's name, and point
 # OAUTH2_PROXY_REDIRECT_URL / the router's Host() at that app's own
-# subdomain(s); add the matching consumer block to catalog.yaml
-# (needs_oidc: true + oidc_redirect_uris) and to the app's own
-# compose.yaml (forwardAuth middleware on every router that needs
-# protecting). Nothing in THIS file's shared shape (services:/networks:)
-# should need touching for a new consumer — if it does, the
-# generalization has regressed.
+# subdomain. Only follow Lazaretto's ${SUBDOMAIN}-templated shape instead
+# if the new consumer is also going to run more than one concurrent
+# instance (i.e. it's also PR-sandboxed) — and if so, nothing in THIS
+# file's shared shape needs touching beyond the new block itself: the
+# add-redirect/remove-redirect provisioner modes and the PR-sandbox-up/
+# down.yml wiring are both already generalized over any needs_oidc app.
 #
 # PIN CHECKPOINT: quay.io/oauth2-proxy/oauth2-proxy:v7.15.3 (verified
 # 2026-07-26). Confirm before Phase 2.
@@ -85,44 +111,56 @@ services:
       - traefik.http.middlewares.oauth2-errors.errors.query=/oauth2/sign_in?rd={url}
       - traefik.http.middlewares.oauth2-errors.errors.statusRewrites.401=302
 
-  # Lazaretto: the platform's first MULTI-ORIGIN consumer — frontend at
-  # lazaretto.${DOMAIN}, backend/API at lazaretto-api.${DOMAIN} (sibling
-  # subdomains, see apps/first-party/lazaretto/compose.yaml). One
-  # oauth2-proxy instance still fronts both: its own router only needs to
-  # live on the frontend host (that's where /oauth2/callback and
-  # /oauth2/sign_in are reachable), but its cookie must be readable on
-  # BOTH hosts, and the forwardAuth middleware it exposes gets attached to
-  # BOTH of Lazaretto's routers (see docs/adding-oidc-to-your-app.md for
-  # the full recipe this generalizes from).
+  # Lazaretto: the platform's first MULTI-ORIGIN, PR-SANDBOXED consumer —
+  # frontend at ${SUBDOMAIN}.${DOMAIN}, backend/API at
+  # ${SUBDOMAIN}-api.${DOMAIN} (sibling subdomains, see
+  # apps/first-party/lazaretto/compose.yaml). This block is brought up
+  # once for the persistent deployment (SUBDOMAIN unset, defaults to
+  # "lazaretto") and once again per open PR sandbox (SUBDOMAIN=
+  # pr-<n>-lazaretto) — every instance shares the one Zitadel Application
+  # (client_id/secret) and cookie name, but each registers and answers for
+  # its OWN redirect URL, added/removed via provisioners/zitadel.sh's
+  # add-redirect/remove-redirect modes as PR sandboxes open/close (see
+  # QuarantineAl/.github's pr-sandbox-up.yml/pr-sandbox-down.yml).
   oauth2-proxy-lazaretto:
     image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.3
-    container_name: quarantine-oauth2-proxy-lazaretto
+    # ${VAR} substitution works anywhere inside a label/env VALUE string,
+    # but a compose service key (this line's own map key, two lines up) and
+    # the top-level `services:` entries can't be templated — only
+    # container_name and the labels below vary per instance.
+    container_name: quarantine-oauth2-proxy-${SUBDOMAIN:-lazaretto}
     restart: unless-stopped
     profiles: [lazaretto]
     environment:
       OAUTH2_PROXY_PROVIDER: oidc
       OAUTH2_PROXY_OIDC_ISSUER_URL: https://auth.${DOMAIN}
+      # Shared across the persistent deployment and every PR sandbox — one
+      # Application, not one per instance (see provisioners/zitadel.sh's
+      # add-redirect/remove-redirect modes and lazaretto's own
+      # docs/USER_MANAGEMENT_OIDC_ZITADEL.md).
       OAUTH2_PROXY_CLIENT_ID: ${OIDC_CLIENT_ID_LAZARETTO}
       OAUTH2_PROXY_CLIENT_SECRET: ${OIDC_CLIENT_SECRET_LAZARETTO}
       OAUTH2_PROXY_COOKIE_SECRET: ${OAUTH2_PROXY_COOKIE_SECRET}
-      # Own cookie NAME, not just its own cookie secret: COOKIE_DOMAINS
-      # below deliberately broadens this instance's cookie beyond its own
-      # host, to every host under ${DOMAIN} — including every OTHER
-      # consumer's single-origin host (status.${DOMAIN}, etc). oauth2-proxy
-      # defaults every instance to the same cookie name (_oauth2_proxy);
-      # left at that default, a browser authenticated to Lazaretto would
-      # also present this cookie when visiting, say, status.${DOMAIN},
-      # alongside Uptime Kuma's own same-named-by-default, host-scoped
-      # cookie — two same-named cookies with different values in one
-      # Cookie header, ambiguous for whichever server reads it first. Any
-      # consumer that sets COOKIE_DOMAINS broader than its own single host
-      # MUST set a unique COOKIE_NAME for exactly this reason.
+      # Own cookie NAME, shared across every Lazaretto instance (not
+      # ${SUBDOMAIN}-templated — see the file header) but still unique
+      # against every OTHER consumer: COOKIE_DOMAINS below deliberately
+      # broadens this cookie beyond any single host, to every host under
+      # ${DOMAIN} — including every OTHER consumer's single-origin host
+      # (status.${DOMAIN}, etc). oauth2-proxy defaults every instance to
+      # the same cookie name (_oauth2_proxy); left at that default, a
+      # browser authenticated to Lazaretto would also present this cookie
+      # when visiting, say, status.${DOMAIN}, alongside Uptime Kuma's own
+      # same-named-by-default, host-scoped cookie — two same-named cookies
+      # with different values in one Cookie header, ambiguous for
+      # whichever server reads it first. Any consumer that sets
+      # COOKIE_DOMAINS broader than its own single host MUST set a unique
+      # COOKIE_NAME for exactly this reason.
       OAUTH2_PROXY_COOKIE_NAME: _oauth2_proxy_lazaretto
       # Plural env var, list-typed (confirmed against oauth2-proxy's own
-      # docs) — the shared parent of lazaretto.${DOMAIN} and
-      # lazaretto-api.${DOMAIN}, so the session cookie set while visiting
-      # the frontend is also sent on the browser's calls to -api. Fails
-      # SILENTLY if wrong or omitted: login appears to succeed (the
+      # docs) — the shared parent of ${SUBDOMAIN}.${DOMAIN} and
+      # ${SUBDOMAIN}-api.${DOMAIN}, so the session cookie set while
+      # visiting the frontend is also sent on the browser's calls to -api.
+      # Fails SILENTLY if wrong or omitted: login appears to succeed (the
       # frontend host got a valid cookie), then every API call still comes
       # back unauthenticated, with nothing in either log pointing at a
       # cookie-domain mismatch.
@@ -131,14 +169,14 @@ services:
       OAUTH2_PROXY_REVERSE_PROXY: "true"
       OAUTH2_PROXY_HTTP_ADDRESS: 0.0.0.0:4180
       OAUTH2_PROXY_UPSTREAMS: static://202
-      # Fixed to the persistent host, not ${SUBDOMAIN}-templated: this
-      # service is core infra (one instance per environment, included via
-      # environments/_template/compose.yaml), never re-invoked per PR
-      # sandbox the way apps/first-party/lazaretto/compose.yaml is — so
-      # ${SUBDOMAIN} has no meaning in this file. Must match one of
-      # catalog.yaml's lazaretto oidc_redirect_uris exactly, or Zitadel
-      # rejects the callback.
-      OAUTH2_PROXY_REDIRECT_URL: https://lazaretto.${DOMAIN}/oauth2/callback
+      # ${SUBDOMAIN}-templated, unlike a never-sandboxed consumer: THIS
+      # instance's own host is whichever one it was brought up for. Must
+      # match a redirect URI actually registered on the shared
+      # Application — the persistent host is in catalog.yaml's
+      # oidc_redirect_uris; every PR sandbox's own host is added by
+      # add-redirect when its sandbox comes up (see the file header) and
+      # removed by remove-redirect when it closes.
+      OAUTH2_PROXY_REDIRECT_URL: https://${SUBDOMAIN:-lazaretto}.${DOMAIN}/oauth2/callback
       OAUTH2_PROXY_SET_XAUTHREQUEST: "true"
       # PASS_ (not SET_) is what actually forwards the raw ID token to the
       # upstream app as `Authorization: Bearer <id_token>` — see the
@@ -162,28 +200,30 @@ services:
     # No healthcheck — same reasoning as oauth2-proxy-uptime-kuma above.
     labels:
       - traefik.enable=true
-      - traefik.http.services.oauth2-proxy-lazaretto.loadbalancer.server.port=4180
+      - traefik.http.services.oauth2-proxy-${SUBDOMAIN:-lazaretto}.loadbalancer.server.port=4180
 
-      # Lives only on the frontend host — /oauth2/callback and
-      # /oauth2/sign_in never need to be reachable on the -api host
+      # Lives only on this instance's own frontend host — /oauth2/callback
+      # and /oauth2/sign_in never need to be reachable on the -api host
       # directly (see docs/adding-oidc-to-your-app.md). priority=100 must
       # outrank Lazaretto's own frontend router (a bare Host() catch-all
       # on this same host, see apps/first-party/lazaretto/compose.yaml),
       # or that router would swallow /oauth2/* requests instead.
-      - traefik.http.routers.oauth2-proxy-lazaretto.rule=Host(`lazaretto.${DOMAIN}`) && PathPrefix(`/oauth2/`)
-      - traefik.http.routers.oauth2-proxy-lazaretto.entrypoints=websecure
-      - traefik.http.routers.oauth2-proxy-lazaretto.tls=true
-      - traefik.http.routers.oauth2-proxy-lazaretto.priority=100
-      - traefik.http.routers.oauth2-proxy-lazaretto.service=oauth2-proxy-lazaretto
+      - traefik.http.routers.oauth2-proxy-${SUBDOMAIN:-lazaretto}.rule=Host(`${SUBDOMAIN:-lazaretto}.${DOMAIN}`) && PathPrefix(`/oauth2/`)
+      - traefik.http.routers.oauth2-proxy-${SUBDOMAIN:-lazaretto}.entrypoints=websecure
+      - traefik.http.routers.oauth2-proxy-${SUBDOMAIN:-lazaretto}.tls=true
+      - traefik.http.routers.oauth2-proxy-${SUBDOMAIN:-lazaretto}.priority=100
+      - traefik.http.routers.oauth2-proxy-${SUBDOMAIN:-lazaretto}.service=oauth2-proxy-${SUBDOMAIN:-lazaretto}
 
-      - traefik.http.middlewares.oauth2-auth-lazaretto.forwardauth.address=http://oauth2-proxy-lazaretto:4180/oauth2/auth
-      - traefik.http.middlewares.oauth2-auth-lazaretto.forwardauth.trustForwardHeader=true
-      - traefik.http.middlewares.oauth2-auth-lazaretto.forwardauth.authResponseHeaders=X-Auth-Request-User,X-Auth-Request-Email,X-Auth-Request-Groups,Authorization
+      # Addressed by container_name, not the (necessarily static)
+      # oauth2-proxy-lazaretto service key — see the file header.
+      - traefik.http.middlewares.oauth2-auth-${SUBDOMAIN:-lazaretto}.forwardauth.address=http://quarantine-oauth2-proxy-${SUBDOMAIN:-lazaretto}:4180/oauth2/auth
+      - traefik.http.middlewares.oauth2-auth-${SUBDOMAIN:-lazaretto}.forwardauth.trustForwardHeader=true
+      - traefik.http.middlewares.oauth2-auth-${SUBDOMAIN:-lazaretto}.forwardauth.authResponseHeaders=X-Auth-Request-User,X-Auth-Request-Email,X-Auth-Request-Groups,Authorization
 
-      - traefik.http.middlewares.oauth2-errors-lazaretto.errors.status=401-403
-      - traefik.http.middlewares.oauth2-errors-lazaretto.errors.service=oauth2-proxy-lazaretto
-      - traefik.http.middlewares.oauth2-errors-lazaretto.errors.query=/oauth2/sign_in?rd={url}
-      - traefik.http.middlewares.oauth2-errors-lazaretto.errors.statusRewrites.401=302
+      - traefik.http.middlewares.oauth2-errors-${SUBDOMAIN:-lazaretto}.errors.status=401-403
+      - traefik.http.middlewares.oauth2-errors-${SUBDOMAIN:-lazaretto}.errors.service=oauth2-proxy-${SUBDOMAIN:-lazaretto}
+      - traefik.http.middlewares.oauth2-errors-${SUBDOMAIN:-lazaretto}.errors.query=/oauth2/sign_in?rd={url}
+      - traefik.http.middlewares.oauth2-errors-${SUBDOMAIN:-lazaretto}.errors.statusRewrites.401=302
 
 networks:
   edge:
