@@ -86,12 +86,13 @@ which compose file declares them, so these names must stay unique across
 every consumer in this one file — a collision silently steals traffic or
 breaks unrelated apps instead of erroring at startup.
 
-**If your app is multi-origin**, three settings need to change together:
+**If your app is multi-origin**, five settings need to change together:
 
 | Setting | Value | Why |
 |---|---|---|
 | `OAUTH2_PROXY_COOKIE_DOMAINS` | `.${DOMAIN}` (the shared parent) | Without this, the cookie set while visiting the frontend is never sent on the browser's calls to the API host — login appears to succeed, then every API call comes back unauthenticated. **Fails silently** — nothing logs a cookie-domain mismatch. |
 | `OAUTH2_PROXY_COOKIE_NAME` | a per-app-unique name, e.g. `_oauth2_proxy_<app>` | oauth2-proxy defaults every instance to the same cookie name (`_oauth2_proxy`). Once `COOKIE_DOMAINS` broadens past your app's own host, that cookie is also sent to *every other app's* host under `${DOMAIN}` — colliding with any other single-origin consumer's own same-named, host-scoped cookie in the same `Cookie` header. Skipping this is the one broadening step that looks harmless and isn't. |
+| `OAUTH2_PROXY_WHITELIST_DOMAINS` | `.${DOMAIN}` (the shared parent) | oauth2-proxy's own safety check on the `rd` (return-destination) param that Traefik's oauth2-errors middleware passes to `/oauth2/sign_in` on any 401. A request that originated on the API host produces `rd=https://<api-host>/...`, which oauth2-proxy rejects as "domain / port not in whitelist" by default (it only trusts its configured redirect host, i.e. the frontend) — and that rejection doesn't just drop the param, it falls all the way back to a bare provider-authorize redirect instead of a normal sign-in-and-return bounce. **Fails silently in the same way as COOKIE_DOMAINS** — nothing points at this being the cause. |
 | Router `Host()` / `OAUTH2_PROXY_REDIRECT_URL` | the frontend host only | `/oauth2/callback` and `/oauth2/sign_in` only need to be reachable on one host — pick the frontend, since that's where users land first. |
 | API host's Traefik router | add a second, `Method(`OPTIONS`)`-matched router at higher priority with **no** oauth2 middlewares, pointed at the same backend service | A browser's CORS preflight never carries credentials (Fetch spec), so forwardAuth always sees it as unauthenticated and answers with the sign-in redirect — which browsers refuse to follow on a preflight, failing every cross-origin fetch before it's even sent. Confirmed live against lazaretto: see `apps/first-party/lazaretto/compose.yaml`'s `-api-preflight` router for the exact shape. Only matters if your frontend and API are different hosts *and* your frontend's requests trigger a preflight (any non-simple header, e.g. `Content-Type: application/json`, or credentialed cross-origin `fetch`) — a same-origin build never hits this. |
 
