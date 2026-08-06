@@ -72,10 +72,25 @@ services:
       ZITADEL_FIRSTINSTANCE_ORG_MACHINE_PAT_EXPIRATIONDATE: "2099-01-01T00:00:00Z"
       ZITADEL_FIRSTINSTANCE_PATPATH: /zitadel/bootstrap/provisioner.pat
 
-      ZITADEL_DEFAULTINSTANCE_FEATURES_LOGINV2_REQUIRED: "true"
+      # loginV2.required stays false: Console's own OIDC authorize redirect
+      # into Login V2 loses the authRequest context and dead-ends on a
+      # context-free "you're signed in" screen with nowhere to go (a known
+      # upstream bug — zitadel/zitadel#10526, #11134, #11142). The legacy
+      # UI (bundled in zitadel-api, served at /ui/login) doesn't have this
+      # problem and is what Console falls back to with the flag off.
+      # lazaretto's own OIDC flow is unaffected either way: token/JWKS/
+      # end_session are core-API endpoints, independent of which UI renders
+      # the interactive sign-in screen.
+      #
+      # This env var ONLY takes effect at first-ever instance creation
+      # (`start-from-init` on an empty DB) — confirmed live: flipping it and
+      # restarting an already-bootstrapped instance changed nothing. An
+      # already-existing instance needs the live SetInstanceFeatures API
+      # call instead — see provisioners/zitadel.sh's `ensure-features` mode,
+      # called from `quarantine start` on every run so this self-heals if
+      # ever flipped back via Console.
+      ZITADEL_DEFAULTINSTANCE_FEATURES_LOGINV2_REQUIRED: "false"
       ZITADEL_DEFAULTINSTANCE_FEATURES_LOGINV2_BASEURI: https://auth.${DOMAIN}/ui/v2/login/
-      ZITADEL_OIDC_DEFAULTLOGINURLV2: https://auth.${DOMAIN}/ui/v2/login/login?authRequest=
-      ZITADEL_OIDC_DEFAULTLOGOUTURLV2: https://auth.${DOMAIN}/ui/v2/login/logout?post_logout_redirect=
 
       # optional: export traces to the shared observability otel-collector
       # (infra/observability/). Unset (default empty) disables this.
