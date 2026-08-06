@@ -82,6 +82,28 @@ services:
       # router's host, not a fixed shared one.
       - traefik.http.routers.${SUBDOMAIN:-lazaretto}-api.middlewares=oauth2-errors-${SUBDOMAIN:-lazaretto},oauth2-auth-${SUBDOMAIN:-lazaretto}
 
+      # CORS preflight bypass: a browser's OPTIONS preflight never carries
+      # credentials (Fetch spec — true regardless of the real request's own
+      # credentials: 'include'), so forwardAuth above always sees it as
+      # unauthenticated and answers with oauth2-errors' 401->302 rewrite. A
+      # redirect response to a preflight is something browsers categorically
+      # refuse to follow ("Redirect is not allowed for a preflight
+      # request"), which fails the *real* request before it's ever sent —
+      # confirmed live: every cross-origin fetch from ${SUBDOMAIN:-lazaretto}.
+      # ${DOMAIN} to this -api host failed this way. This second router
+      # matches OPTIONS specifically and skips both oauth2 middlewares
+      # entirely, going straight to the backend service — lazaretto-backend's
+      # own main.ts already calls app.enableCors({..., credentials: true}),
+      # it just never got a chance to answer before this router existed.
+      # Higher priority than the router above so it wins for OPTIONS on the
+      # same host; the actual GET/POST/etc. traffic is untouched and still
+      # goes through forwardAuth via that other router.
+      - traefik.http.routers.${SUBDOMAIN:-lazaretto}-api-preflight.rule=Host(`${SUBDOMAIN:-lazaretto}-api.${DOMAIN}`) && Method(`OPTIONS`)
+      - traefik.http.routers.${SUBDOMAIN:-lazaretto}-api-preflight.entrypoints=websecure
+      - traefik.http.routers.${SUBDOMAIN:-lazaretto}-api-preflight.tls=true
+      - traefik.http.routers.${SUBDOMAIN:-lazaretto}-api-preflight.priority=200
+      - traefik.http.routers.${SUBDOMAIN:-lazaretto}-api-preflight.service=${SUBDOMAIN:-lazaretto}-backend
+
   lazaretto-frontend:
     image: ghcr.io/quarantineal/lazaretto-frontend:${LAZARETTO_VERSION:-CHANGEME}
     container_name: quarantine-${SUBDOMAIN:-lazaretto}-frontend
