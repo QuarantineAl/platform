@@ -165,6 +165,22 @@ services:
       # back unauthenticated, with nothing in either log pointing at a
       # cookie-domain mismatch.
       OAUTH2_PROXY_COOKIE_DOMAINS: .${DOMAIN}
+      # Same broadened-domain pattern as COOKIE_DOMAINS above, different
+      # purpose: this is oauth2-proxy's own safety check on the `rd`
+      # (return-destination) query param that Traefik's oauth2-errors
+      # middleware passes to /oauth2/sign_in whenever a 401 needs to bounce
+      # the browser through a fresh login. Without this, `rd=https://
+      # ${SUBDOMAIN:-lazaretto}-api.${DOMAIN}/...` — the only kind of `rd`
+      # a request that originated on the -api host can ever produce — gets
+      # rejected as "domain / port not in whitelist" (oauth2-proxy only
+      # trusts its own configured redirect host by default, i.e. the
+      # frontend). Confirmed live: that rejection doesn't just drop the rd
+      # param, it falls all the way back to a bare provider-authorize
+      # redirect instead of a normal sign-in-and-return bounce. Every other
+      # first-party/third-party consumer here is single-origin, so its own
+      # sign-in host and its rd targets are always the same host — this
+      # only bites a multi-origin consumer like Lazaretto.
+      OAUTH2_PROXY_WHITELIST_DOMAINS: .${DOMAIN}
       OAUTH2_PROXY_EMAIL_DOMAINS: "*"
       OAUTH2_PROXY_REVERSE_PROXY: "true"
       OAUTH2_PROXY_HTTP_ADDRESS: 0.0.0.0:4180
