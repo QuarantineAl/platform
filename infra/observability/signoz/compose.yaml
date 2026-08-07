@@ -141,6 +141,60 @@ services:
       retries: 3
       start_period: 40s
 
+  # ClickHouse's own internal self-monitoring tables (system.trace_log,
+  # system.asynchronous_metric_log, system.metric_log) already carry a
+  # 1-day TTL, but TTL enforcement is itself a background merge — if these
+  # tables grow large enough that a merge runs out of memory, the TTL can
+  # never execute either, and the table just keeps growing until every
+  # merge attempt fails, burning CPU retrying forever. Confirmed live on
+  # both dev and prod: system.trace_log alone reached ~95M rows before
+  # merges started failing outright with MEMORY_LIMIT_EXCEEDED, pinning
+  # ClickHouse's CPU at 150%/35% respectively with no application-level
+  # cause at all.
+  #
+  # This runs well before that point: truncates any watched table once it
+  # crosses a threshold far below where merges actually start failing, so
+  # the failure mode above can never be reached again. Truncating is safe
+  # — these are ClickHouse's own diagnostic tables, not application
+  # telemetry (traces/logs/metrics ingested from real services live in
+  # SigNoz's own separate schema, entirely untouched by this).
+  #
+  # Reuses the same pinned clickhouse-server image rather than a new one
+  # (it already bundles clickhouse-client) purely as a client over the
+  # `observability` network — no Docker socket access needed.
+  signoz-telemetrystore-clickhouse-system-log-guard:
+    image: clickhouse/clickhouse-server:25.12.5
+    container_name: quarantine-signoz-clickhouse-system-log-guard
+    restart: unless-stopped
+    profiles: [observability]
+    depends_on:
+      signoz-telemetrystore-clickhouse-0-0:
+        condition: service_healthy
+    networks:
+      - observability
+    # Every $ below is doubled ($$) so docker compose's own ${...}
+    # interpolation leaves it alone and it reaches bash as a literal $ —
+    # confirmed live: `docker compose config` silently blanks out every
+    # unescaped $var here (they're not compose-level vars at all, they're
+    # this script's own loop variables), corrupting the script entirely.
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        set -u
+        threshold_rows=5000000
+        host=signoz-telemetrystore-clickhouse-0-0
+        while true; do
+          for table in trace_log asynchronous_metric_log metric_log; do
+            rows="$$(clickhouse-client --host "$$host" --query "SELECT sum(rows) FROM system.parts WHERE active AND database='system' AND table='$${table}'" 2>/dev/null)"
+            rows="$${rows:-0}"
+            if [ "$$rows" -gt "$$threshold_rows" ] 2>/dev/null; then
+              echo "$$(date -u +%FT%TZ) system.$${table} at $${rows} rows (> $${threshold_rows}) -- truncating"
+              clickhouse-client --host "$$host" --query "TRUNCATE TABLE system.$${table}"
+            fi
+          done
+          sleep 1800
+        done
+
   signoz-signoz-0:
     image: signoz/signoz:v0.134.0
     container_name: quarantine-signoz
