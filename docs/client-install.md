@@ -363,6 +363,25 @@ or pushes — `git add`/`commit`/`push` the manifest change yourself
 afterward (both subcommands print this reminder), so the repo stays an
 accurate record of what's actually running.
 
+### Reading a secret manually
+
+```bash
+SOPS_AGE_KEY_FILE=/opt/quarantine/keys/age-<env>.txt \
+  sops -d environments/<env>/secrets.sops.yaml | yq '.core.zitadel.admin_password'
+```
+
+Run from the repo checkout root (`/opt/quarantine/repo` on a real host). Plain `sops -d` on its own
+won't find the key — it only checks its own default locations (`SOPS_AGE_KEY`, an SSH key,
+`~/.config/sops/age/keys.txt`, ...), none of which is this platform's own
+`/opt/quarantine/keys/age-<env>.txt` convention (see "The age key" above) — `SOPS_AGE_KEY_FILE` has
+to be set explicitly, every time, on every host. Swap the `yq` path for whatever key you actually
+need; every generated credential lives somewhere under `.core.*`/`.<app>.*` in that same file. Drop
+the `yq` pipe entirely to dump the whole decrypted file if you'd rather browse it than target one
+field.
+
+**Handle whatever this prints like the credential it is** — it's live production access, not
+something to paste into a chat log, a ticket, or Slack. Read it, use it, done.
+
 ### Checking the version
 
 ```bash
