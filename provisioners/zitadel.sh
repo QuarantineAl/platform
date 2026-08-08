@@ -277,6 +277,25 @@ if [[ "$MODE" == "add-redirect" || "$MODE" == "remove-redirect" ]]; then
       log "remove-redirect: removing ${redirect_uri} from '${name}' (${app_id})"
     fi
 
+    # Zitadel's UpdateApplication has no idempotent no-op response of its
+    # own -- calling it with a redirect list identical to what's already
+    # stored 400s with {"code":"failed_precondition","message":"No changes"}
+    # instead of a harmless 200. That's the ordinary case for add-redirect,
+    # not an exceptional one: pr-sandbox-up.yml calls this on every push to
+    # an open PR, and only the first push for a given PR number actually
+    # changes anything -- every push after that would otherwise fail CI on
+    # a call that has nothing left to do (confirmed live: lazaretto PR #18's
+    # second push failed exactly this way). Symmetrically covers
+    # remove-redirect against a URI that's already gone (a PR closed twice,
+    # or closed after a failed add). Comparing here, before ever calling
+    # UpdateApplication, both prevents the wasted call and sidesteps having
+    # to pattern-match a specific error response to tell "already done"
+    # apart from a real failure.
+    if [[ "$new_redirects_json" == "$current_redirects_json" && "$new_logout_redirects_json" == "$current_logout_redirects_json" ]]; then
+      log "${MODE}: '${redirect_uri}' on '${name}' (${app_id}) already matches the desired state -- nothing to do"
+      exit 0
+    fi
+
     update_body="$(cat <<JSON
 {
   "applicationId": "${app_id}",
