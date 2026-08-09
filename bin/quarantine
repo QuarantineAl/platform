@@ -897,6 +897,81 @@ cmd_app_remove_redirect() {
 }
 
 # ---------------------------------------------------------------------------
+# Zitadel identity + project-role passthroughs
+# ---------------------------------------------------------------------------
+
+# _zitadel <mode> [args...] — decrypt this environment's secrets once and hand
+# them to provisioners/zitadel.sh, which is never called directly (its own
+# header says so). Every identity subcommand is a thin wrapper around exactly
+# this, so argument shapes live in one place — the provisioner — rather than
+# being validated twice and drifting.
+#
+# Deliberately no acquire_lock, matching cmd_app_add_redirect: that lock is
+# whole-environment and non-blocking, meant to protect manifest.yaml /
+# secrets.sops.yaml read-modify-write cycles, and none of these touch either.
+# Taking it here would make two concurrent onboardings fail outright instead
+# of simply proceeding.
+#
+# stdin is passed straight through, which is what makes
+# `user add --password-stdin` work without a password ever reaching argv.
+_zitadel() {
+  local mode="$1"; shift
+  local plaintext
+  plaintext="$(secrets_decrypt_to_tmpfs "$QUARANTINE_REPO" "$QUARANTINE_ENV")"
+  trap_add "shred_file '${plaintext}'"
+  "${QUARANTINE_REPO}/provisioners/zitadel.sh" "$mode" \
+    "$QUARANTINE_REPO" "$QUARANTINE_ENV" "$plaintext" "$@"
+}
+
+cmd_app_list_redirects() {
+  load_config
+  [[ $# -ge 1 ]] || die "usage: quarantine app list-redirects <name> [--json]"
+  local app_name="$1"; shift
+  _require_oidc_app "$app_name"
+  _zitadel list-redirects "$app_name" "$@"
+}
+
+cmd_app_add_role() {
+  load_config
+  [[ $# -ge 2 ]] || die "usage: quarantine app add-role <name> <role> [--display-name D] [--group G]"
+  local app_name="$1" role="$2"; shift 2
+  _require_oidc_app "$app_name"
+  _zitadel app-add-role "$app_name" "$role" "$@"
+}
+
+cmd_app_list_roles() {
+  load_config
+  [[ $# -ge 1 ]] || die "usage: quarantine app list-roles <name> [--json]"
+  local app_name="$1"; shift
+  _require_oidc_app "$app_name"
+  _zitadel app-list-roles "$app_name" "$@"
+}
+
+cmd_user() {
+  load_config
+  local subcmd="${1:-}"
+  [[ $# -gt 0 ]] && shift
+  case "$subcmd" in
+    add)    [[ $# -ge 1 ]] || die "usage: quarantine user add <email> [--given-name G] [--family-name F] [--invite] [--password-stdin]"
+            _zitadel user-add "$@" ;;
+    list)   _zitadel user-list "$@" ;;
+    show)   [[ $# -ge 1 ]] || die "usage: quarantine user show <email> [--json]"
+            _zitadel user-show "$@" ;;
+    remove) [[ $# -eq 1 ]] || die "usage: quarantine user remove <email>"
+            _zitadel user-remove "$@" ;;
+    invite) [[ $# -eq 1 ]] || die "usage: quarantine user invite <email>"
+            _zitadel user-invite "$@" ;;
+    grant)  [[ $# -eq 3 ]] || die "usage: quarantine user grant <email> <app> <role>"
+            _require_oidc_app "$2"
+            _zitadel user-grant "$@" ;;
+    revoke) [[ $# -eq 3 ]] || die "usage: quarantine user revoke <email> <app> <role>"
+            _require_oidc_app "$2"
+            _zitadel user-revoke "$@" ;;
+    *) usage >&2; die "unknown 'user' subcommand: ${subcmd}" ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
 # status
 # ---------------------------------------------------------------------------
 
@@ -1030,6 +1105,31 @@ Commands:
   app remove-redirect <name> <redirect_uri>
                           Remove one redirect URI added via add-redirect
                           (e.g. when a PR sandbox closes).
+  app list-redirects <name> [--json]
+                          List every redirect URI registered on <name>'s
+                          shared Zitadel Application.
+  app add-role <name> <role> [--display-name D] [--group G]
+                          Add a project role (e.g. lazaretto-admin). Roles
+                          live on the shared project, not per Application.
+  app list-roles <name> [--json]
+                          List the shared project's roles.
+
+  user add <email> [--given-name G] [--family-name F] [--invite] [--password-stdin]
+                          Create a Zitadel human user. Idempotent by email.
+                          Prefer --invite; --password-stdin reads the
+                          password from stdin so it never enters argv.
+  user list [--query S] [--json]
+                          Every Zitadel human user.
+  user show <email> [--json]
+  user remove <email>     Delete the Zitadel identity.
+  user invite <email>     Re-send the invite code.
+  user grant <email> <app> <role>
+  user revoke <email> <app> <role>
+                          Grant/revoke a project role for one person.
+
+  An identity alone grants no access to anything: reaching a Lazaretto
+  instance also needs membership of a tenant. See 'quarantine tenant'.
+
   status                  Show container status for this environment.
   version                 Print the version of the repo checkout on disk.
   upgrade                 Fetch + fast-forward-only merge origin/main, then start.
@@ -1054,9 +1154,13 @@ main() {
         remove) cmd_app_remove "$@" ;;
         add-redirect) cmd_app_add_redirect "$@" ;;
         remove-redirect) cmd_app_remove_redirect "$@" ;;
+        list-redirects) cmd_app_list_redirects "$@" ;;
+        add-role) cmd_app_add_role "$@" ;;
+        list-roles) cmd_app_list_roles "$@" ;;
         *) usage >&2; die "unknown 'app' subcommand: ${subcmd}" ;;
       esac
       ;;
+    user) cmd_user "$@" ;;
     status) cmd_status "$@" ;;
     version) cmd_version "$@" ;;
     upgrade) cmd_upgrade "$@" ;;
