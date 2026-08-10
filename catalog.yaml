@@ -22,6 +22,21 @@
 #   oidc_redirect_uris
 #                 redirect URIs registered on the OIDC client. Only present
 #                 when needs_oidc is true.
+#   generated_secrets
+#                 optional list of app-owned secrets the platform generates
+#                 and persists itself, rather than an operator supplying one.
+#                 Each entry is {key, env, generator}: `key` is where the
+#                 value lives in secrets.sops.yaml (under .apps[<name>] for a
+#                 manifest deployment, or under .tenants[<tenant>] for a
+#                 per-tenant instance), `env` is the variable the app's
+#                 compose fragment reads, and `generator` is one of hex32 or
+#                 alnum32 (see gen_secret in lib/common.sh).
+#
+#                 Generation is ONE-WAY and idempotent: a value that already
+#                 exists is never regenerated. That is not a nicety — these
+#                 key application data at rest, and minting a fresh one makes
+#                 everything encrypted under the old one permanently
+#                 unreadable.
 #   notes         free-text caveats surfaced by `quarantine app add` and in
 #                 docs/adding-an-app.md.
 
@@ -34,6 +49,15 @@ apps:
     needs_oidc: true
     oidc_redirect_uris:
       - "https://lazaretto.${DOMAIN}/oauth2/callback"
+    generated_secrets:
+      # AES-256-GCM master key for the Credentials feature (SSH keys, GitHub
+      # tokens, npm tokens) — backend/src/common/secret-crypto.ts reads it as
+      # LAZARETTO_CREDENTIALS_KEY and requires exactly 32 bytes of hex.
+      # Per-tenant instances get their own key rather than sharing this one,
+      # so one tenant's stored credentials are not decryptable with another's.
+      - key: credentials_key
+        env: LAZARETTO_CREDENTIALS_KEY
+        generator: hex32
     notes: >-
       Two-origin app: frontend at ${subdomain}.${DOMAIN}, backend/API at
       ${subdomain}-api.${DOMAIN} — the second hostname is hardcoded in the
