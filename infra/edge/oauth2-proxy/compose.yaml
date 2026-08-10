@@ -181,7 +181,40 @@ services:
       # sign-in host and its rd targets are always the same host — this
       # only bites a multi-origin consumer like Lazaretto.
       OAUTH2_PROXY_WHITELIST_DOMAINS: .${DOMAIN}
-      OAUTH2_PROXY_EMAIL_DOMAINS: "*"
+      # WHO may pass, once the OIDC round-trip above has proved WHO THEY ARE.
+      #
+      # These two settings are one mechanism and must be read together —
+      # setting the allowlist without narrowing EMAIL_DOMAINS is a SILENT
+      # no-op. From oauth2-proxy v7.15.3's own validator.go (newValidatorImpl):
+      #
+      #     valid = isEmailValidWithDomains(email, domains)
+      #     if !valid { valid = validUsers.IsValid(email) }   // the allowlist
+      #     if allowAll { valid = true }                      // overrides it
+      #
+      # `allowAll` is set by a "*" entry in domains, and that last line
+      # unconditionally discards the allowlist result. No error, no log line.
+      # So an instance that sets AUTHENTICATED_EMAILS_FILE while leaving
+      # EMAIL_DOMAINS at "*" admits every authenticated user — which, once
+      # each tenant has its own subdomain, means any tenant's member reaches
+      # every other tenant. This is the single highest-consequence line in
+      # this file.
+      #
+      # Default "*" preserves today's behavior exactly for the persistent
+      # deployment and every PR sandbox, which want any authenticated user.
+      # `-` not `:-` on purpose: a per-tenant instance exports this as an
+      # EMPTY string to turn allowAll off, and `:-` would treat empty as
+      # unset and hand it right back "*". An empty domain list is fine
+      # alongside an allowlist — oauth2-proxy only rejects the config when
+      # email-domain, authenticated-emails-file AND htpasswd-file are all
+      # absent (pkg/validation/options.go).
+      OAUTH2_PROXY_EMAIL_DOMAINS: ${LAZARETTO_EMAIL_DOMAINS-*}
+      # Checked AFTER the cookie/OIDC session is already valid, so it is an
+      # authorization gate, not an authentication one. One address per line;
+      # parsed as CSV, so `#` starts a comment and addresses are lowercased
+      # on both load and lookup (validator.go's UserMap). oauth2-proxy
+      # watches this path and reloads on write, so adding a tenant member
+      # needs no restart.
+      OAUTH2_PROXY_AUTHENTICATED_EMAILS_FILE: /etc/oauth2-proxy/authenticated-emails.txt
       OAUTH2_PROXY_REVERSE_PROXY: "true"
       OAUTH2_PROXY_HTTP_ADDRESS: 0.0.0.0:4180
       OAUTH2_PROXY_UPSTREAMS: static://202
@@ -219,6 +252,37 @@ services:
       OAUTH2_PROXY_SCOPE: "openid email profile urn:zitadel:iam:user:resourceowner urn:zitadel:iam:org:projects:roles"
     networks:
       - edge
+    volumes:
+      # Backs OAUTH2_PROXY_AUTHENTICATED_EMAILS_FILE above. Unset for the
+      # persistent deployment and every PR sandbox, where /dev/null stands
+      # in: oauth2-proxy opens it happily, parses zero records, and every
+      # lookup misses — harmless precisely because EMAIL_DOMAINS is still
+      # "*" for those instances. A per-tenant instance points this at its
+      # own allowlist and empties EMAIL_DOMAINS in the same breath.
+      #
+      # LONG SYNTAX with a `${VAR:-/dev/null}` source, deliberately, and
+      # both halves of that matter:
+      #   - A volumes ENTRY cannot be made to vanish through interpolation,
+      #     so `${VAR:+...}`-style gating does not work here — with the
+      #     variable unset it collapses to an empty string, which is not a
+      #     valid mount and fails to parse. The entry must always exist and
+      #     always resolve to a real path; /dev/null is that path.
+      #   - Short syntax ("${VAR:-/dev/null}:/etc/...:ro") parses as one
+      #     colon-delimited string, so it survives an unset variable only by
+      #     luck of the default and gives a far worse error when it doesn't.
+      #     Long syntax keeps source/target/read_only as separate keys.
+      # Verified with `docker compose config` on dev, prod and test, with
+      # the variable both set and unset.
+      #
+      # The provisioner must rewrite this file IN PLACE (truncate + write),
+      # never write-a-temp-then-rename: Docker binds a single-file mount by
+      # inode, so a rename swaps the host's file out from under a container
+      # that goes on reading the original — the update would never be seen,
+      # and no watcher event would fire either.
+      - type: bind
+        source: ${LAZARETTO_ALLOWLIST_FILE:-/dev/null}
+        target: /etc/oauth2-proxy/authenticated-emails.txt
+        read_only: true
     # No healthcheck — same reasoning as oauth2-proxy-uptime-kuma above.
     labels:
       - traefik.enable=true

@@ -608,15 +608,9 @@ generate_env_file() {
     printf 'OIDC_CLIENT_SECRET_%s=%s\n' "$oidc_var" "$oidc_secret" >> "$tmp"
   done <<< "$oidc_apps"
 
-  # Version vars are computed from the manifest's OWN app list (not a
-  # hardcoded name list) and explicitly unset before manifest_export_versions
-  # runs, so a stale/ambient shell-exported var of the same generic name
-  # (e.g. a CI job that happens to already export IMMICH_VERSION for an
-  # unrelated reason) can never leak into the generated .env — only a
-  # version manifest_export_versions itself exports THIS run survives the
-  # `${!var:-}` check below. This also means any future catalog app gets
-  # its pinned version persisted automatically, with no hardcoded list to
-  # keep in sync.
+  # This environment's manifest app list, read once and shared by the two
+  # blocks below (generated secrets, then version vars) — both are driven by
+  # "which apps does this environment actually run".
   local -a manifest_app_names=()
   local manifest_app_count app_i app_nm
   manifest_app_count="$(yq eval '.apps | length' "$manifest")"
@@ -626,6 +620,57 @@ generate_env_file() {
     manifest_app_names+=("$app_nm")
   done
 
+  # Per-app generated secrets, declared in catalog.yaml's own
+  # `generated_secrets` (not a hardcoded list here — same reasoning as the
+  # OIDC pairs above and the version vars below: a future app that needs one
+  # is a catalog edit, with this function untouched).
+  #
+  # Generate-once-then-reuse, never regenerate: these key application data at
+  # rest — LAZARETTO_CREDENTIALS_KEY encrypts stored SSH keys and API tokens —
+  # so re-minting on a later `start` would silently make every existing
+  # credential permanently undecryptable. The value is written back to
+  # secrets.sops.yaml the first time and read from there forever after, which
+  # is also what makes `quarantine start` safe to run repeatedly.
+  #
+  # Only apps IN THIS ENVIRONMENT'S MANIFEST are handled here. Per-tenant
+  # instances are deliberately not in any manifest, and get their own
+  # per-tenant key via provisioners/lazaretto-tenant.sh, from the same
+  # catalog declaration.
+  local gs_app gs_count gs_i gs_key gs_env gs_generator gs_path gs_value
+  local secrets_dirty=false
+  for gs_app in "${manifest_app_names[@]}"; do
+    gs_count="$(yq eval "[.apps[] | select(.name == \"${gs_app}\") | .generated_secrets[]?] | length" "${repo_root}/catalog.yaml")"
+    for (( gs_i = 0; gs_i < gs_count; gs_i++ )); do
+      gs_key="$(yq eval ".apps[] | select(.name == \"${gs_app}\") | .generated_secrets[${gs_i}].key" "${repo_root}/catalog.yaml")"
+      gs_env="$(yq eval ".apps[] | select(.name == \"${gs_app}\") | .generated_secrets[${gs_i}].env" "${repo_root}/catalog.yaml")"
+      gs_generator="$(yq eval ".apps[] | select(.name == \"${gs_app}\") | .generated_secrets[${gs_i}].generator" "${repo_root}/catalog.yaml")"
+      [[ -z "$gs_key" || "$gs_key" == "null" ]] && continue
+
+      gs_path=".apps[\"${gs_app}\"].${gs_key}"
+      gs_value="$(secrets_get "$plaintext" "$gs_path")"
+      if [[ -z "$gs_value" || "$gs_value" == CHANGEME* ]]; then
+        log "generating ${gs_env} for '${gs_app}' (first run; persisted to secrets.sops.yaml and never regenerated)"
+        gs_value="$(gen_secret "$gs_generator")"
+        [[ -n "$gs_value" ]] || die "generator '${gs_generator}' produced an empty value for ${gs_path}"
+        secrets_set "$repo_root" "$env" "$gs_path" "$gs_value"
+        secrets_dirty=true
+      fi
+      printf '%s=%s\n' "$gs_env" "$gs_value" >> "$tmp"
+    done
+  done
+  if [[ "$secrets_dirty" == true ]]; then
+    log "secrets.sops.yaml was updated — remember to git add/commit/push environments/${env}/secrets.sops.yaml"
+  fi
+
+  # Version vars are computed from the manifest's OWN app list (not a
+  # hardcoded name list) and explicitly unset before manifest_export_versions
+  # runs, so a stale/ambient shell-exported var of the same generic name
+  # (e.g. a CI job that happens to already export IMMICH_VERSION for an
+  # unrelated reason) can never leak into the generated .env — only a
+  # version manifest_export_versions itself exports THIS run survives the
+  # `${!var:-}` check below. This also means any future catalog app gets
+  # its pinned version persisted automatically, with no hardcoded list to
+  # keep in sync.
   local -a version_vars=()
   local nm vn var
   for nm in "${manifest_app_names[@]}"; do
@@ -897,6 +942,164 @@ cmd_app_remove_redirect() {
 }
 
 # ---------------------------------------------------------------------------
+# Zitadel identity + project-role passthroughs
+# ---------------------------------------------------------------------------
+
+# _zitadel <mode> [args...] — decrypt this environment's secrets once and hand
+# them to provisioners/zitadel.sh, which is never called directly (its own
+# header says so). Every identity subcommand is a thin wrapper around exactly
+# this, so argument shapes live in one place — the provisioner — rather than
+# being validated twice and drifting.
+#
+# Deliberately no acquire_lock, matching cmd_app_add_redirect: that lock is
+# whole-environment and non-blocking, meant to protect manifest.yaml /
+# secrets.sops.yaml read-modify-write cycles, and none of these touch either.
+# Taking it here would make two concurrent onboardings fail outright instead
+# of simply proceeding.
+#
+# stdin is passed straight through, which is what makes
+# `user add --password-stdin` work without a password ever reaching argv.
+_zitadel() {
+  local mode="$1"; shift
+  local plaintext
+  plaintext="$(secrets_decrypt_to_tmpfs "$QUARANTINE_REPO" "$QUARANTINE_ENV")"
+  trap_add "shred_file '${plaintext}'"
+  "${QUARANTINE_REPO}/provisioners/zitadel.sh" "$mode" \
+    "$QUARANTINE_REPO" "$QUARANTINE_ENV" "$plaintext" "$@"
+}
+
+cmd_app_list_redirects() {
+  load_config
+  [[ $# -ge 1 ]] || die "usage: quarantine app list-redirects <name> [--json]"
+  local app_name="$1"; shift
+  _require_oidc_app "$app_name"
+  _zitadel list-redirects "$app_name" "$@"
+}
+
+cmd_app_add_role() {
+  load_config
+  [[ $# -ge 2 ]] || die "usage: quarantine app add-role <name> <role> [--display-name D] [--group G]"
+  local app_name="$1" role="$2"; shift 2
+  _require_oidc_app "$app_name"
+  _zitadel app-add-role "$app_name" "$role" "$@"
+}
+
+cmd_app_list_roles() {
+  load_config
+  [[ $# -ge 1 ]] || die "usage: quarantine app list-roles <name> [--json]"
+  local app_name="$1"; shift
+  _require_oidc_app "$app_name"
+  _zitadel app-list-roles "$app_name" "$@"
+}
+
+cmd_user() {
+  load_config
+  local subcmd="${1:-}"
+  [[ $# -gt 0 ]] && shift
+  case "$subcmd" in
+    add)    [[ $# -ge 1 ]] || die "usage: quarantine user add <email> [--given-name G] [--family-name F] [--invite] [--password-stdin]"
+            _zitadel user-add "$@" ;;
+    list)   _zitadel user-list "$@" ;;
+    show)   [[ $# -ge 1 ]] || die "usage: quarantine user show <email> [--json]"
+            _zitadel user-show "$@" ;;
+    remove) [[ $# -eq 1 ]] || die "usage: quarantine user remove <email>"
+            _zitadel user-remove "$@" ;;
+    invite) [[ $# -eq 1 ]] || die "usage: quarantine user invite <email>"
+            _zitadel user-invite "$@" ;;
+    grant)  [[ $# -eq 3 ]] || die "usage: quarantine user grant <email> <app> <role>"
+            _require_oidc_app "$2"
+            _zitadel user-grant "$@" ;;
+    revoke) [[ $# -eq 3 ]] || die "usage: quarantine user revoke <email> <app> <role>"
+            _require_oidc_app "$2"
+            _zitadel user-revoke "$@" ;;
+    *) usage >&2; die "unknown 'user' subcommand: ${subcmd}" ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
+# tenant — one Lazaretto instance per tenant
+# ---------------------------------------------------------------------------
+
+# _tenant <verb> [args...] — decrypt once, hand off to the provisioner.
+#
+# The env lock is taken only for the verbs that can write secrets.sops.yaml
+# (a tenant's first-run credentials key). The read verbs deliberately skip it
+# for the same reason app add-redirect does: it is non-blocking, so taking it
+# on `tenant list` would make a listing fail outright while an unrelated
+# onboarding was in flight.
+_tenant() {
+  local verb="$1"; shift
+  case "$verb" in
+    add|purge) acquire_lock "$QUARANTINE_REPO" "$QUARANTINE_ENV" ;;
+  esac
+  local plaintext
+  plaintext="$(secrets_decrypt_to_tmpfs "$QUARANTINE_REPO" "$QUARANTINE_ENV")"
+  trap_add "shred_file '${plaintext}'"
+  "${QUARANTINE_REPO}/provisioners/lazaretto-tenant.sh" "$verb" \
+    "$QUARANTINE_REPO" "$QUARANTINE_ENV" "$plaintext" "$@"
+}
+
+# cmd_tenant_onboard — the composite: create the person, then give them a
+# tenant of their own. Kept as a wrapper around the two real commands rather
+# than a third code path, so there is exactly one implementation of each half
+# and `user add` + `tenant add` run by hand are byte-for-byte equivalent.
+cmd_tenant_onboard() {
+  [[ $# -ge 1 ]] || die "usage: quarantine tenant onboard <tenant> --email <email> [--invite] [--given-name G] [--family-name F] [--version V] [--concurrency N]"
+  local tenant="$1"; shift
+  local email="" version="" concurrency=""
+  local -a user_flags=()
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --email) email="${2:?--email requires a value}"; shift 2 ;;
+      --invite) user_flags+=(--invite); shift ;;
+      --given-name) user_flags+=(--given-name "${2:?--given-name requires a value}"); shift 2 ;;
+      --family-name) user_flags+=(--family-name "${2:?--family-name requires a value}"); shift 2 ;;
+      --version) version="${2:?--version requires a value}"; shift 2 ;;
+      --concurrency) concurrency="${2:?--concurrency requires a value}"; shift 2 ;;
+      *) die "unknown argument to tenant onboard: $1" ;;
+    esac
+  done
+  [[ -n "$email" ]] || die "tenant onboard: --email is required"
+  # One address only: onboard is the "give this person their own tenant" path
+  # by definition. A team goes through `tenant add --email a,b` or
+  # `tenant member add`, both of which make the trust decision explicit.
+  [[ "$email" != *,* ]] || die "tenant onboard takes a single --email (a tenant with several members is a trust decision — use 'tenant add ${tenant} --email a,b' or 'tenant member add')"
+
+  log "onboard 1/2: Zitadel identity for ${email}"
+  # "${arr[@]}" with no ":-" fallback — this repo requires bash >= 4.4, where
+  # an empty array expands to zero words under `set -u`. A ":-" fallback would
+  # expand to one EMPTY argument, which user-add would reject as unknown.
+  _zitadel user-add "$email" "${user_flags[@]}"
+
+  log "onboard 2/2: tenant '${tenant}'"
+  local -a add_args=("$tenant" --email "$email")
+  [[ -n "$version" ]] && add_args+=(--version "$version")
+  [[ -n "$concurrency" ]] && add_args+=(--concurrency "$concurrency")
+  _tenant add "${add_args[@]}"
+}
+
+cmd_tenant() {
+  load_config
+  local subcmd="${1:-}"
+  [[ $# -gt 0 ]] && shift
+  case "$subcmd" in
+    add|list|show|start|stop|restart|remove|purge|upgrade|upgrade-all|logs)
+      _tenant "$subcmd" "$@" ;;
+    onboard)
+      cmd_tenant_onboard "$@" ;;
+    member)
+      local msub="${1:-}"
+      [[ $# -gt 0 ]] && shift
+      case "$msub" in
+        add|remove|list) _tenant "member-${msub}" "$@" ;;
+        *) usage >&2; die "unknown 'tenant member' subcommand: ${msub}" ;;
+      esac ;;
+    *) usage >&2; die "unknown 'tenant' subcommand: ${subcmd}" ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
 # status
 # ---------------------------------------------------------------------------
 
@@ -1030,6 +1233,51 @@ Commands:
   app remove-redirect <name> <redirect_uri>
                           Remove one redirect URI added via add-redirect
                           (e.g. when a PR sandbox closes).
+  app list-redirects <name> [--json]
+                          List every redirect URI registered on <name>'s
+                          shared Zitadel Application.
+  app add-role <name> <role> [--display-name D] [--group G]
+                          Add a project role (e.g. lazaretto-admin). Roles
+                          live on the shared project, not per Application.
+  app list-roles <name> [--json]
+                          List the shared project's roles.
+
+  user add <email> [--given-name G] [--family-name F] [--invite] [--password-stdin]
+                          Create a Zitadel human user. Idempotent by email.
+                          Prefer --invite; --password-stdin reads the
+                          password from stdin so it never enters argv.
+  user list [--query S] [--json]
+                          Every Zitadel human user.
+  user show <email> [--json]
+  user remove <email>     Delete the Zitadel identity.
+  user invite <email>     Re-send the invite code.
+  user grant <email> <app> <role>
+  user revoke <email> <app> <role>
+                          Grant/revoke a project role for one person.
+
+  An identity alone grants no access to anything: reaching a Lazaretto
+  instance also needs membership of a tenant. See 'quarantine tenant'.
+
+  tenant onboard <tenant> --email <e> [--invite]
+                          Create the person and give them their own tenant.
+  tenant add <tenant> --email <e>[,<e>...] [--version V] [--concurrency N]
+                          Allowlist + redirect URI + instance. Re-runnable.
+  tenant list [--json]    Every tenant: status, version, members, URL.
+  tenant show <tenant> [--json]
+  tenant start|stop|restart <tenant>
+  tenant remove <tenant>  Stop and delete containers. Volume KEPT.
+  tenant purge <tenant> [--yes]
+                          Irreversible: deletes the data volume too.
+  tenant upgrade <tenant> [version]
+  tenant upgrade-all [version]
+                          Tenants are outside 'start's reconcile loop, so a
+                          new version reaches them only through these.
+  tenant logs <tenant> [service...]
+  tenant member add|remove <tenant> <email>
+  tenant member list <tenant> [--json]
+                          Members share one container — adding one is a
+                          trust decision, not just a config change.
+
   status                  Show container status for this environment.
   version                 Print the version of the repo checkout on disk.
   upgrade                 Fetch + fast-forward-only merge origin/main, then start.
@@ -1054,9 +1302,14 @@ main() {
         remove) cmd_app_remove "$@" ;;
         add-redirect) cmd_app_add_redirect "$@" ;;
         remove-redirect) cmd_app_remove_redirect "$@" ;;
+        list-redirects) cmd_app_list_redirects "$@" ;;
+        add-role) cmd_app_add_role "$@" ;;
+        list-roles) cmd_app_list_roles "$@" ;;
         *) usage >&2; die "unknown 'app' subcommand: ${subcmd}" ;;
       esac
       ;;
+    user) cmd_user "$@" ;;
+    tenant) cmd_tenant "$@" ;;
     status) cmd_status "$@" ;;
     version) cmd_version "$@" ;;
     upgrade) cmd_upgrade "$@" ;;
