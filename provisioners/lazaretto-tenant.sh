@@ -242,15 +242,31 @@ read_members() {
 # reading the old file forever with no watcher event. One printf for the whole
 # body, so the container sees complete content on the reload rather than a
 # half-written list.
+#
+# PERMISSIONS ARE LOAD-BEARING, and get this wrong and the failure is
+# spectacularly indirect. oauth2-proxy runs as uid 65532, not root, and
+# LoadAuthenticatedEmailsFile calls logger.Fatalf — not a warning — when it
+# cannot open the file. So a root-owned 0600 file inside a 0700 directory
+# (the obvious "these are email addresses, lock them down" choice, and what
+# this function did first) makes the sidecar exit at startup and crash-loop
+# under restart: unless-stopped. Traefik then cannot see that container's
+# labels, so the oauth2-auth-<sub> middleware the app's routers reference
+# "does not exist", both routers are dropped, and the whole tenant answers
+# 404 — with nothing in the 404 pointing at a file mode. Confirmed live,
+# exactly that chain.
+#
+# 0644/0755 is also the right call on the merits: this is a list of email
+# addresses, not credentials, and the directory sits under /opt/quarantine
+# alongside the age keys, which keep their own restrictive modes.
 write_members() {
   local t="$1"; shift
   local file dir
   dir="$(tenant_dir "$t")"; file="$(tenant_allowlist "$t")"
-  mkdir -p "$dir"; chmod 700 "$dir"
-  [[ -f "$file" ]] || install -m 600 /dev/null "$file"
+  mkdir -p "$dir"; chmod 755 "$dir"
+  [[ -f "$file" ]] || install -m 644 /dev/null "$file"
   : > "$file"
   (( $# > 0 )) && printf '%s\n' "$@" >> "$file"
-  chmod 600 "$file"
+  chmod 644 "$file"
 }
 
 # --- per-tenant generated secrets, from catalog.yaml's own declaration -------
@@ -308,6 +324,34 @@ tenant_up() {
   qcompose_scoped "$(tenant_project "$t")" "$env" \
     -f "$COMPOSE_APP" -f "$COMPOSE_PROXY" \
     --profile "$APP_NAME" up -d
+
+  assert_proxy_healthy "$t"
+}
+
+# assert_proxy_healthy <tenant> — the sidecar has no HEALTHCHECK (distroless,
+# nothing to probe itself with), so `up -d` returns success even when it is
+# already dying. It exits rather than warns on an unreadable allowlist, and a
+# crash-looping sidecar takes the tenant's Traefik middleware down with it,
+# leaving the whole hostname answering 404 with nothing to connect it back to
+# the real cause. Checking the restart count here turns that into one clear
+# error at the point of provisioning.
+assert_proxy_healthy() {
+  local t="$1" c status restarts waited=0
+  c="quarantine-oauth2-proxy-$(tenant_subdomain "$t")"
+  while (( waited < 15 )); do
+    status="$(docker inspect --format '{{.State.Status}}' "$c" 2>/dev/null || echo missing)"
+    restarts="$(docker inspect --format '{{.RestartCount}}' "$c" 2>/dev/null || echo 0)"
+    if [[ "$status" == "running" ]] && (( restarts == 0 )); then
+      return 0
+    fi
+    if [[ "$status" == "restarting" ]] || (( restarts > 0 )); then
+      warn "tenant '${t}''s oauth2-proxy is crash-looping (status=${status}, restarts=${restarts}). Its last words:"
+      docker logs --tail 5 "$c" 2>&1 | sed 's/^/    /' >&2
+      die "tenant '${t}' came up but its access-control sidecar did not. Until it runs, Traefik has no oauth2-auth-$(tenant_subdomain "$t") middleware and the tenant's hostname answers 404. The usual cause is an allowlist the container's non-root uid cannot read: check $(tenant_allowlist "$t") is 0644 inside a traversable directory."
+    fi
+    sleep 3; waited=$(( waited + 3 ))
+  done
+  warn "tenant '${t}''s oauth2-proxy is still ${status} after ${waited}s — check: docker logs ${c}"
 }
 
 tenant_compose() {
