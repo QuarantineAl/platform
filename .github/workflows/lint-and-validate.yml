@@ -51,11 +51,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Keep this list in step with the repo — a script added without a
+          # line here is simply never linted, which is how
+          # lazaretto-tenant.sh went unchecked from the day it landed.
           scripts=(
             install.sh
             bin/quarantine
             provisioners/postgres.sh
             provisioners/zitadel.sh
+            provisioners/lazaretto-tenant.sh
             scripts/new-app.sh
             lib/common.sh
           )
