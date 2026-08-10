@@ -22,7 +22,7 @@ quarantine/
 │   ├── data/
 │   │   ├── postgres/                # shared Postgres — one database + role per consumer
 │   │   └── redis/                   # shared Valkey/Redis — no consumer yet, provisioned ahead of need
-│   ├── observability/                # compose profile: "observability" (on by default)
+│   ├── observability/                # compose profile: "observability" (opt-in per environment)
 │   │   ├── otel-collector/           # OTLP ingestion
 │   │   └── signoz/                   # SigNoz UI/API + its ClickHouse telemetry store
 │   └── ci/
@@ -96,9 +96,20 @@ never more than two levels deep:
 - `observability/` — OpenTelemetry collection (`otel-collector/`) and
   SigNoz (`signoz/`), split into two fragments sharing one Docker network
   so the collector and the telemetry store it feeds can be reasoned about
-  independently. Profile-gated behind `observability`, which every
-  environment enables by default via `COMPOSE_PROFILES` — same active
-  service set as before this was gated, just now skippable.
+  independently. Profile-gated behind `observability`, and OPT-IN per
+  environment: `quarantine start` brings it up only when that environment's
+  `manifest.yaml` sets `observability: true`. Seven containers and roughly
+  1.5 GB of RAM — the largest single line item in the shared-infra footprint,
+  and worth not paying for on a host that also has to fit per-tenant app
+  instances, or on an environment nobody is currently instrumenting.
+
+  The flag is deliberately skip-only: `false` means "do not start it", never
+  "stop it". A reconcile loop that silently killed a SigNoz stack somebody
+  had brought up by hand to debug something would be a far worse failure than
+  leaving seven containers running, so turning observability off is two
+  explicit steps — set the flag, then stop it yourself. `quarantine status`
+  and `quarantine destroy` both still cover the profile unconditionally, so a
+  stack running against a false flag stays visible and removable.
 - `ci/` — the self-hosted GitHub Actions runner pool (`github-runner/`).
   Every environment gets its own pool, added by hand to that
   environment's `compose.yaml` (never the shared `_template/`) — see

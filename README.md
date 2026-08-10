@@ -100,7 +100,7 @@ are in the manifest:
 | Traefik | Edge TLS termination + routing | ACME via Cloudflare DNS-01 |
 | Postgres 17.10-alpine | Shared datastore | stock image, one database + role per consumer; not a vendor fork |
 | Zitadel v4.16.1 (`zitadel-api` + `zitadel-login`) | OIDC identity provider | backs both the CLI's own provisioners and every catalog app with `needs_oidc: true` |
-| SigNoz + otel-collector | Observability | always on — `quarantine start` passes `--profile observability` unconditionally |
+| SigNoz + otel-collector | Observability | opt-in — `quarantine start` brings it up only when this environment's `manifest.yaml` sets `observability: true`. Never stopped by that flag; see docs/architecture.md |
 | oauth2-proxy | Forward-auth sidecar | present in every environment; one named instance per `needs_oidc` consumer (e.g. uptime-kuma, lazaretto), each dormant until its own profile is in the manifest — see `docs/adding-oidc-to-your-app.md` |
 
 One thing that is *not* part of that default set:
