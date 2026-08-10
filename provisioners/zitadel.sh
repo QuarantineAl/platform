@@ -496,6 +496,56 @@ require_user_id() {
   printf '%s' "$uid"
 }
 
+# smtp_configured — does this Zitadel instance have any SMTP provider at all?
+#
+# This has to be asked UP FRONT, because a mail failure is invisible from the
+# API. Zitadel's invite/verification endpoints return 200 the moment they
+# queue the notification, and delivery happens later in a separate worker; a
+# missing provider surfaces only as `could not create email channel` in the
+# server's own log, never in the response. An earlier version of this script
+# only fell back to returning the code when the API call itself errored — a
+# condition that never occurs — so it cheerfully reported "invite emailed" for
+# mail that was never sent. Confirmed against both live instances, neither of
+# which has ever had SMTP configured.
+smtp_configured() {
+  local response count
+  response="$(zitadel_call POST /admin/v1/smtp/_search '{"query":{"limit":1}}' 2>/dev/null)" || return 1
+  count="$(printf '%s' "$response" | yq -p json '(.result // []) | length' 2>/dev/null)"
+  [[ "$count" =~ ^[0-9]+$ ]] && (( count > 0 ))
+}
+
+# issue_invite <user_id> <email> [resend]
+# Emails the invite when this instance can actually send mail, and otherwise
+# returns the code for the operator to relay — rather than claiming to have
+# sent something. Shared by user-add --invite and user-invite so the two can
+# never disagree about what happened.
+issue_invite() {
+  local uid="$1" addr="$2" resend="${3:-false}" path response code
+  if smtp_configured; then
+    path="/v2/users/${uid}/invite_code"
+    [[ "$resend" == true ]] && path="${path}/resend"
+    if zitadel_call POST "$path" '{"sendCode":{}}' >/dev/null 2>&1; then
+      log "invite emailed to ${addr}"
+      return 0
+    fi
+    warn "Zitadel has an SMTP provider but rejected the send for ${addr} — falling back to a returned code"
+  else
+    warn "this Zitadel instance has NO SMTP provider configured, so it cannot deliver mail."
+    warn "Nothing was emailed. Configure one in the Console (Settings -> Notifications -> SMTP),"
+    warn "or relay this code to ${addr} yourself:"
+  fi
+
+  if response="$(zitadel_call POST "/v2/users/${uid}/invite_code" '{"returnCode":{}}' 2>/dev/null)"; then
+    code="$(printf '%s' "$response" | yq -p json '.inviteCode // ""')"
+    [[ -n "$code" ]] || { warn "Zitadel returned no invite code: ${response}"; return 1; }
+    warn "  invite code for ${addr}: ${code}"
+    warn "  they redeem it at https://auth.${DOMAIN}/ui/login/user/init?userID=${uid}&code=${code}"
+    return 0
+  fi
+  warn "could not issue an invite for '${addr}' at all — retry with: quarantine user invite ${addr}"
+  return 1
+}
+
 # =============================================================================
 # list-redirects: read-only counterpart to add-redirect/remove-redirect.
 # =============================================================================
@@ -654,33 +704,18 @@ if [[ "$MODE" == "user-add" ]]; then
   log "created Zitadel user '${email}' (${new_user_id})"
 
   if [[ "$want_invite" == true ]]; then
-    # Best-effort by design: an environment with no SMTP configured cannot
-    # deliver the mail, and failing the whole onboarding over that would be
-    # wrong when the code can simply be handed over out of band instead.
-    if invite_response="$(zitadel_call POST "/v2/users/${new_user_id}/invite_code" '{"sendCode":{}}' 2>/dev/null)"; then
-      log "invite emailed to ${email}"
-    elif invite_response="$(zitadel_call POST "/v2/users/${new_user_id}/invite_code" '{"returnCode":{}}' 2>/dev/null)"; then
-      returned_code="$(printf '%s' "$invite_response" | yq -p json '.inviteCode // ""')"
-      warn "could not send the invite email (is SMTP configured on this Zitadel?) — give this code to ${email} out of band:"
-      warn "  invite code: ${returned_code}"
-    else
-      warn "user '${email}' was created but no invite could be issued — resend later with: quarantine user invite ${email}"
-    fi
+    # Never fails the onboarding: the user exists either way, and an
+    # environment with no mail delivery is a reason to hand the code over
+    # directly, not to unwind a successful creation.
+    issue_invite "$new_user_id" "$email" false || true
   fi
   exit 0
 fi
 
 if [[ "$MODE" == "user-invite" ]]; then
   user_id="$(require_user_id "$email")"
-  if zitadel_call POST "/v2/users/${user_id}/invite_code/resend" '{"sendCode":{}}' >/dev/null 2>&1; then
-    log "invite re-sent to ${email}"
-  elif invite_response="$(zitadel_call POST "/v2/users/${user_id}/invite_code" '{"returnCode":{}}' 2>/dev/null)"; then
-    returned_code="$(printf '%s' "$invite_response" | yq -p json '.inviteCode // ""')"
-    warn "could not send the invite email — give this code to ${email} out of band:"
-    warn "  invite code: ${returned_code}"
-  else
-    die "failed to issue an invite for '${email}' (${user_id})"
-  fi
+  issue_invite "$user_id" "$email" true \
+    || die "failed to issue an invite for '${email}' (${user_id})"
   exit 0
 fi
 
