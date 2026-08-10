@@ -157,6 +157,16 @@ manifest_export_versions() {
 
 QUARANTINE_KEYS_DIR="${QUARANTINE_KEYS_DIR:-/opt/quarantine/keys}"
 
+# Per-tenant host-local state (oauth2-proxy allowlists and the small settings
+# file beside them). OUTSIDE the repo, on purpose and decided before the first
+# tenant existed: an allowlist is a list of real people's email addresses, and
+# .gitignore's opening rule makes everything under environments/<env>/ tracked
+# BY DEFAULT — so a tenant directory in there would be committed unless
+# somebody remembered an ignore entry, and would stay one `git add -f` away
+# from a leak afterwards. This is the same treatment, and the same location,
+# as the age private keys above.
+QUARANTINE_TENANTS_DIR="${QUARANTINE_TENANTS_DIR:-/opt/quarantine/tenants}"
+
 age_key_path() {
   local env="$1"
   printf '%s/age-%s.txt' "$QUARANTINE_KEYS_DIR" "$env"
@@ -299,15 +309,41 @@ qcompose() {
   local env="$1"; shift
   local repo_root="${QUARANTINE_REPO:?QUARANTINE_REPO must be set}"
   local compose_file="${repo_root}/environments/${env}/compose.yaml"
-  local env_file="${repo_root}/environments/${env}/.env"
 
   [[ -f "$compose_file" ]] || die "no compose.yaml for environment '$env': $compose_file"
-  [[ -f "$env_file" ]] || die "no .env for environment '$env': $env_file"
+
+  qcompose_scoped "quarantine-${env}" "$env" -f "$compose_file" "$@"
+}
+
+# qcompose_scoped <project_name> <env> [docker compose args...]
+# The same wrapper for an invocation that is NOT the whole environment: it
+# still pins --env-file so interpolation and secrets resolve identically, but
+# lets the caller choose the Compose project name and pass its own `-f`
+# fragments before the subcommand.
+#
+# Needed because a per-tenant Lazaretto instance is its own Compose project
+# assembled from just two fragments (the app plus its oauth2-proxy sidecar),
+# NOT from environments/<env>/compose.yaml — bringing that whole graph up
+# under a second project name would start a duplicate Traefik, Postgres and
+# Zitadel inside it. The PR-sandbox workflow has always had this shape; it
+# reached for `docker compose` directly, which is exactly what this file's
+# rule against that exists to prevent. Routing it through here keeps
+# --project-name and --env-file consistent for every invocation, which is the
+# actual point of the rule.
+#
+# Variables exported by the caller still win over the --env-file for
+# interpolation, which is how a tenant overrides SUBDOMAIN, LAZARETTO_VERSION
+# and the allowlist/limit vars without touching the environment's .env.
+qcompose_scoped() {
+  local project="$1" env="$2"; shift 2
+  local repo_root="${QUARANTINE_REPO:?QUARANTINE_REPO must be set}"
+  local env_file="${repo_root}/environments/${env}/.env"
+
+  [[ -f "$env_file" ]] || die "no .env for environment '$env': $env_file (run 'quarantine start' once to generate it)"
 
   docker compose \
-    --project-name "quarantine-${env}" \
+    --project-name "$project" \
     --env-file "$env_file" \
-    -f "$compose_file" \
     "$@"
 }
 
@@ -478,6 +514,28 @@ gen_password() {
   # redirection, not a pipeline — pipefail doesn't apply, and the process
   # substitution's own exit status is never checked by the parent shell.
   head -c "$length" < <(LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom)
+}
+
+# gen_hex [bytes=32] — random lowercase hex, 2 chars per byte. For keys that
+# are parsed as hex rather than used as an opaque string: LAZARETTO_CREDENTIALS_KEY
+# is Buffer.from(raw, 'hex') and must decode to exactly 32 bytes, so
+# gen_password's alphanumeric output would silently decode to garbage of the
+# wrong length. `od`, not xxd — xxd ships with vim, which a minimal host need
+# not have.
+gen_hex() {
+  local bytes="${1:-32}"
+  LC_ALL=C od -An -v -tx1 -N "$bytes" /dev/urandom | tr -d ' \n'
+}
+
+# gen_secret <generator> — dispatch for catalog.yaml's `generated_secrets`
+# entries, so adding a new kind of app secret is a catalog edit plus one case
+# here rather than a change to generate_env_file's body.
+gen_secret() {
+  case "$1" in
+    hex32) gen_hex 32 ;;
+    alnum32) gen_password 32 ;;
+    *) die "unknown secret generator '${1}' (expected hex32 or alnum32)" ;;
+  esac
 }
 
 # gen_password_complex [length=32] — like gen_password, but guarantees at
