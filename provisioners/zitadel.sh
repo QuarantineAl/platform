@@ -63,6 +63,66 @@
 #       would NOT hold if a caller ever ran this against a fresh per-job
 #       checkout with no shared filesystem).
 #
+#   provisioners/zitadel.sh list-redirects <repo_root> <env> <plaintext_secrets_file> <canonical_name> [--json]
+#       Enumerate the redirect URIs currently registered on <canonical_name>'s
+#       shared Application. add-redirect/remove-redirect could write that list
+#       but nothing could read it, which made it unauditable from the CLI —
+#       an increasingly bad property as per-tenant instances add one entry
+#       each. Read-only; never calls UpdateApplication.
+#
+#   provisioners/zitadel.sh user-add    <repo_root> <env> <secrets> <email> [--given-name G] [--family-name F] [--invite] [--password-stdin]
+#   provisioners/zitadel.sh user-list   <repo_root> <env> <secrets> [--query <substr>] [--json]
+#   provisioners/zitadel.sh user-show   <repo_root> <env> <secrets> <email> [--json]
+#   provisioners/zitadel.sh user-remove <repo_root> <env> <secrets> <email>
+#   provisioners/zitadel.sh user-invite <repo_root> <env> <secrets> <email>
+#   provisioners/zitadel.sh user-grant  <repo_root> <env> <secrets> <email> <canonical_name> <role>
+#   provisioners/zitadel.sh user-revoke <repo_root> <env> <secrets> <email> <canonical_name> <role>
+#   provisioners/zitadel.sh app-add-role   <repo_root> <env> <secrets> <canonical_name> <role> [--display-name D] [--group G]
+#   provisioners/zitadel.sh app-list-roles <repo_root> <env> <secrets> <canonical_name> [--json]
+#       Human identity management. Provisioning an instance is only half of
+#       onboarding: the person who logs in lives in Zitadel, and their
+#       membership of a tenant lives in that tenant's oauth2-proxy allowlist
+#       (provisioners/lazaretto-tenant.sh). EMAIL is the join key between the
+#       two, and neither half implies the other — a Zitadel user with no
+#       allowlist entry authenticates and is then 403'd at the edge; an
+#       allowlist entry with no Zitadel user is inert. These modes therefore
+#       always take an email and resolve it to a userId themselves; no
+#       operator should ever have to paste a Zitadel id.
+#
+#       API DECISIONS, each confirmed against the running Zitadel (v4.16.1)
+#       rather than taken from documentation — several documented paths turned
+#       out to be wrong:
+#         - Users use the v2 REST shape (POST /v2/users for search, POST
+#           /v2/users/human to create, GET/DELETE /v2/users/{id}), not the
+#           Connect-RPC shape the project/application calls below use. Both
+#           are served, but the REST shape is what Zitadel's own v2 docs
+#           describe for these, and search doubles as the email->userId
+#           resolver so the two styles don't actually mix within one mode.
+#         - The invite endpoints are UNDERSCORED: /v2/users/{id}/invite_code
+#           and /v2/users/{id}/invite_code/resend. The hyphenated spelling
+#           (invite-code/resend) 404s.
+#         - There is no email-code resend endpoint at all; the hyphenated
+#           /email-code/resend and /email/_resend both 404. Re-sending an
+#           address verification is POST /v2/users/{id}/email with sendCode.
+#         - Grants stay on the v1 Management API (POST /management/v1/users/
+#           {userId}/grants to create, POST /management/v1/users/grants/
+#           _search to read, PUT .../grants/{grantId} to change roleKeys).
+#           This is the one deprecated surface used here, kept deliberately:
+#           the v2 authorization service is not what this Zitadel serves for
+#           project-role grants today, and the per-user _search path under a
+#           userId 405s — only the org-wide search with a userIdQuery filter
+#           works. Revisit if a future Zitadel drops the v1 Management API;
+#           it is isolated to zitadel_user_grant_find/-grant/-revoke below.
+#         - Project roles are likewise v1 Management (POST /management/v1/
+#           projects/{projectId}/roles, .../roles/_search).
+#
+#       Passwords are accepted on STDIN (--password-stdin), never as an argv
+#       value, for the same reason the Authorization header below is fed over
+#       stdin: argv is readable by any other local process. TENANT_OPERATIONS.md
+#       originally specified a `--password VALUE` flag; that spelling is not
+#       offered. --invite is strongly preferred either way — it keeps this
+#       platform out of the business of handling passwords at all.
+#
 # All apps share one Zitadel project ("quarantine-apps"), each as its own
 # OIDC application within it — one org, one project, one app-per-catalog-app
 # (or, under the shared-Application mode above, one app per catalog app
@@ -98,39 +158,125 @@ require_cmd docker sops yq flock
 
 # --- mode + argument parsing -------------------------------------------------
 MODE="ensure"
-if [[ "${1:-}" == "add-redirect" || "${1:-}" == "remove-redirect" || "${1:-}" == "ensure-features" ]]; then
-  MODE="$1"
-  shift
-fi
+case "${1:-}" in
+  add-redirect|remove-redirect|list-redirects|ensure-features| \
+  user-add|user-list|user-show|user-remove|user-invite|user-grant|user-revoke| \
+  app-add-role|app-list-roles)
+    MODE="$1"; shift ;;
+esac
 
-redirect_uri=""
-name=""
-if [[ "$MODE" == "ensure" ]]; then
-  if [[ $# -ne 4 ]]; then
-    die "usage: provisioners/zitadel.sh <repo_root> <env> <plaintext_secrets_file> <name>"
-  fi
-  repo_root="$1" env="$2" plaintext_file="$3" name="$4"
-elif [[ "$MODE" == "ensure-features" ]]; then
-  if [[ $# -ne 3 ]]; then
-    die "usage: provisioners/zitadel.sh ensure-features <repo_root> <env> <plaintext_secrets_file>"
-  fi
+redirect_uri="" name="" email="" role="" role_display_name="" role_group=""
+given_name="" family_name="" list_query=""
+want_json=false want_invite=false want_password_stdin=false
+
+# Every mode except the two that predate this block takes the same three
+# leading positionals; parse them once rather than in each branch.
+_take_common() {
+  [[ $# -ge 3 ]] || die "usage: provisioners/zitadel.sh ${MODE} <repo_root> <env> <plaintext_secrets_file> ..."
   repo_root="$1" env="$2" plaintext_file="$3"
-else
-  if [[ $# -ne 5 ]]; then
-    die "usage: provisioners/zitadel.sh ${MODE} <repo_root> <env> <plaintext_secrets_file> <canonical_name> <redirect_uri>"
-  fi
-  repo_root="$1" env="$2" plaintext_file="$3" name="$4" redirect_uri="$5"
-  [[ -n "$redirect_uri" ]] || die "${MODE}: redirect_uri must not be empty"
-fi
+}
+
+case "$MODE" in
+  ensure)
+    [[ $# -eq 4 ]] || die "usage: provisioners/zitadel.sh <repo_root> <env> <plaintext_secrets_file> <name>"
+    repo_root="$1" env="$2" plaintext_file="$3" name="$4" ;;
+  ensure-features)
+    [[ $# -eq 3 ]] || die "usage: provisioners/zitadel.sh ensure-features <repo_root> <env> <plaintext_secrets_file>"
+    repo_root="$1" env="$2" plaintext_file="$3" ;;
+  add-redirect|remove-redirect)
+    [[ $# -eq 5 ]] || die "usage: provisioners/zitadel.sh ${MODE} <repo_root> <env> <plaintext_secrets_file> <canonical_name> <redirect_uri>"
+    repo_root="$1" env="$2" plaintext_file="$3" name="$4" redirect_uri="$5"
+    [[ -n "$redirect_uri" ]] || die "${MODE}: redirect_uri must not be empty" ;;
+  list-redirects|app-list-roles)
+    _take_common "$@"; shift 3
+    [[ $# -ge 1 ]] || die "usage: provisioners/zitadel.sh ${MODE} <repo_root> <env> <plaintext_secrets_file> <canonical_name> [--json]"
+    name="$1"; shift
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --json) want_json=true; shift ;;
+        *) die "unknown argument to ${MODE}: $1" ;;
+      esac
+    done ;;
+  app-add-role)
+    _take_common "$@"; shift 3
+    [[ $# -ge 2 ]] || die "usage: provisioners/zitadel.sh app-add-role <repo_root> <env> <plaintext_secrets_file> <canonical_name> <role> [--display-name D] [--group G]"
+    name="$1" role="$2"; shift 2
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --display-name) role_display_name="${2:?--display-name requires a value}"; shift 2 ;;
+        --group) role_group="${2:?--group requires a value}"; shift 2 ;;
+        *) die "unknown argument to app-add-role: $1" ;;
+      esac
+    done ;;
+  user-add)
+    _take_common "$@"; shift 3
+    [[ $# -ge 1 ]] || die "usage: provisioners/zitadel.sh user-add <repo_root> <env> <plaintext_secrets_file> <email> [--given-name G] [--family-name F] [--invite] [--password-stdin]"
+    email="$1"; shift
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --given-name) given_name="${2:?--given-name requires a value}"; shift 2 ;;
+        --family-name) family_name="${2:?--family-name requires a value}"; shift 2 ;;
+        --invite) want_invite=true; shift ;;
+        --password-stdin) want_password_stdin=true; shift ;;
+        # Refused rather than silently ignored: a caller reaching for this
+        # is trying to hand a real password, and quietly creating a
+        # password-less account instead is the worst possible outcome.
+        --password) die "user-add: --password is not supported (a password in argv is readable by any local process) — pipe it to --password-stdin instead, or prefer --invite" ;;
+        *) die "unknown argument to user-add: $1" ;;
+      esac
+    done ;;
+  user-show|user-remove|user-invite)
+    _take_common "$@"; shift 3
+    [[ $# -ge 1 ]] || die "usage: provisioners/zitadel.sh ${MODE} <repo_root> <env> <plaintext_secrets_file> <email> [--json]"
+    email="$1"; shift
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --json) want_json=true; shift ;;
+        *) die "unknown argument to ${MODE}: $1" ;;
+      esac
+    done ;;
+  user-grant|user-revoke)
+    _take_common "$@"; shift 3
+    [[ $# -eq 3 ]] || die "usage: provisioners/zitadel.sh ${MODE} <repo_root> <env> <plaintext_secrets_file> <email> <canonical_name> <role>"
+    email="$1" name="$2" role="$3" ;;
+  user-list)
+    _take_common "$@"; shift 3
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --json) want_json=true; shift ;;
+        --query) list_query="${2:?--query requires a value}"; shift 2 ;;
+        *) die "unknown argument to user-list: $1" ;;
+      esac
+    done ;;
+esac
 
 [[ -f "$plaintext_file" ]] || die "plaintext secrets file not found: $plaintext_file"
+
 # Same gate as postgres.sh, for the same reason: this script is directly
-# invocable with a bare name argument, and `name` ends up embedded in JSON
-# request bodies below. ensure-features has no per-app name, so it's exempt.
-if [[ "$MODE" != "ensure-features" ]]; then
+# invocable with bare arguments, and every one of these ends up embedded in a
+# JSON request body below, where an unescaped quote would break out of the
+# intended field. ensure-features and the user-* modes have no per-app name,
+# so they're exempt from the name check specifically.
+if [[ -n "$name" ]]; then
   [[ "$name" =~ ^[a-z][a-z0-9-]*$ ]] \
     || die "invalid name '${name}': lowercase letters, digits, hyphens only, must start with a letter"
 fi
+if [[ -n "$email" ]]; then
+  [[ "$email" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]] \
+    || die "invalid email '${email}'"
+fi
+if [[ -n "$role" ]]; then
+  # Zitadel role keys are free-form strings; this is the conservative subset
+  # that covers every realistic key (e.g. "lazaretto-admin") without
+  # admitting a quote or backslash.
+  [[ "$role" =~ ^[A-Za-z0-9._:-]+$ ]] \
+    || die "invalid role '${role}': letters, digits, dot, underscore, colon, hyphen only"
+fi
+for _v in "$given_name" "$family_name" "$role_display_name" "$role_group" "$list_query"; do
+  [[ "$_v" == *'"'* || "$_v" == *'\'* ]] \
+    && die "invalid value '${_v}': double quotes and backslashes are not allowed"
+done
+unset _v
 
 # PIN CHECKPOINT: curlimages/curl:8.11.1 (verified 2026-07-26) — a minimal,
 # official image used only as a throwaway HTTP client inside the docker
@@ -211,21 +357,38 @@ org_id="$(printf '%s' "$whoami_response" | yq -p json '.user.details.resourceOwn
 [[ -n "$org_id" && "$org_id" != "null" ]] || die "could not resolve organization id from /auth/v1/users/me response: ${whoami_response}"
 
 # --- ensure the shared project exists ---------------------------------------
-list_proj_body="$(printf '{"filters":[{"projectNameFilter":{"projectName":"%s"}},{"organizationIdFilter":{"organizationId":"%s"}}]}' "$PROJECT_NAME" "$org_id")"
-list_proj_response="$(zitadel_call POST /zitadel.project.v2.ProjectService/ListProjects "$list_proj_body")" \
-  || die "failed to list Zitadel projects"
-project_id="$(printf '%s' "$list_proj_response" | yq -p json '.projects[0].projectId')"
+# A function, and called on demand rather than unconditionally, because it
+# CREATES the project when it's missing. The user-* modes that only touch
+# people (add/list/show/remove/invite) have no business bringing a project
+# into existence as a side effect of, say, listing users on a fresh
+# environment. The modes that genuinely need a project id — the redirect and
+# role modes, plus user-grant/user-revoke, which grant a role that only
+# exists on a project — call this explicitly.
+project_id=""
+ensure_project_id() {
+  [[ -n "$project_id" ]] && return 0
+  local list_proj_body list_proj_response create_proj_body create_proj_response
+  list_proj_body="$(printf '{"filters":[{"projectNameFilter":{"projectName":"%s"}},{"organizationIdFilter":{"organizationId":"%s"}}]}' "$PROJECT_NAME" "$org_id")"
+  list_proj_response="$(zitadel_call POST /zitadel.project.v2.ProjectService/ListProjects "$list_proj_body")" \
+    || die "failed to list Zitadel projects"
+  project_id="$(printf '%s' "$list_proj_response" | yq -p json '.projects[0].projectId')"
 
-if [[ -z "$project_id" || "$project_id" == "null" ]]; then
-  log "creating Zitadel project '${PROJECT_NAME}'"
-  create_proj_body="$(printf '{"organizationId":"%s","name":"%s"}' "$org_id" "$PROJECT_NAME")"
-  create_proj_response="$(zitadel_call POST /zitadel.project.v2.ProjectService/CreateProject "$create_proj_body")" \
-    || die "failed to create Zitadel project '${PROJECT_NAME}'"
-  project_id="$(printf '%s' "$create_proj_response" | yq -p json '.projectId')"
-  [[ -n "$project_id" && "$project_id" != "null" ]] || die "CreateProject did not return a projectId: ${create_proj_response}"
-else
-  log "using existing Zitadel project '${PROJECT_NAME}' (${project_id})"
-fi
+  if [[ -z "$project_id" || "$project_id" == "null" ]]; then
+    log "creating Zitadel project '${PROJECT_NAME}'"
+    create_proj_body="$(printf '{"organizationId":"%s","name":"%s"}' "$org_id" "$PROJECT_NAME")"
+    create_proj_response="$(zitadel_call POST /zitadel.project.v2.ProjectService/CreateProject "$create_proj_body")" \
+      || die "failed to create Zitadel project '${PROJECT_NAME}'"
+    project_id="$(printf '%s' "$create_proj_response" | yq -p json '.projectId')"
+    [[ -n "$project_id" && "$project_id" != "null" ]] || die "CreateProject did not return a projectId: ${create_proj_response}"
+  else
+    log "using existing Zitadel project '${PROJECT_NAME}' (${project_id})"
+  fi
+}
+
+case "$MODE" in
+  ensure|add-redirect|remove-redirect|list-redirects|app-add-role|app-list-roles|user-grant|user-revoke)
+    ensure_project_id ;;
+esac
 
 # A redirectUris entry is always an /oauth2/callback URL; Zitadel's
 # end_session_endpoint checks post_logout_redirect_uri against the
@@ -235,6 +398,360 @@ fi
 oauth2_callback_to_origin() {
   printf '%s' "${1%/oauth2/callback}"
 }
+
+# =============================================================================
+# Shared helpers for the read/identity modes below.
+# =============================================================================
+
+# zitadel_call_private <method> <path> <json_body>
+# Same as zitadel_call, but feeds the request BODY through curl's -K config
+# on stdin alongside the Authorization header, instead of via --data in argv.
+# zitadel_call's own comment notes its bodies are "not secret — app names,
+# redirect URIs", which is true of every mode that predates this one. It is
+# NOT true of user-add --password-stdin, whose body carries a real password,
+# and argv is readable by any other local process via `docker inspect`/`ps`
+# for as long as the container exists. Used only where the body is sensitive;
+# everything else stays on the plainer, easier-to-debug zitadel_call.
+#
+# Bodies here are always built single-line via printf, which matters: a
+# curl config value is terminated by its line ending, so an embedded literal
+# newline would silently truncate the request.
+zitadel_call_private() {
+  local method="$1" path="$2" body="$3" escaped
+  escaped="$(printf '%s' "$body" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
+  {
+    printf 'header = "Authorization: Bearer %s"\n' "$provisioner_pat"
+    printf 'data = "%s"\n' "$escaped"
+  } | docker run --rm -i --network "$ZITADEL_NETWORK" "$CURL_IMAGE" \
+        -sS --fail-with-body -K - -X "$method" \
+        "http://zitadel-api:8080${path}" \
+        -H "Host: auth.${DOMAIN}" \
+        -H "Content-Type: application/json"
+}
+
+# find_application_id <name> — the Application id for one catalog app within
+# the shared project, or empty. Never creates.
+find_application_id() {
+  local app="$1" body response
+  body="$(printf '{"filters":[{"projectIdFilter":{"projectId":"%s"}},{"nameFilter":{"name":"%s"}}]}' "$project_id" "$app")"
+  response="$(zitadel_call POST /zitadel.application.v2.ApplicationService/ListApplications "$body")" \
+    || die "failed to list Zitadel applications for project '${PROJECT_NAME}'"
+  printf '%s' "$response" | yq -p json '.applications[0].applicationId // ""'
+}
+
+# The one place the shape of a "user" in every --json output is defined, so
+# `user list` and `user show` can never drift apart. Applied to a single
+# element of ListUsers' own `result` array.
+USER_PROJECTION='{
+  "userId": .userId,
+  "email": (.human.email.email // ""),
+  "emailVerified": (.human.email.isVerified // false),
+  "username": (.username // ""),
+  "givenName": (.human.profile.givenName // ""),
+  "familyName": (.human.profile.familyName // ""),
+  "displayName": (.human.profile.displayName // ""),
+  "state": (.state // "")
+}'
+
+# search_users <extra_query_json> — POST /v2/users restricted to human users.
+# Machine users (the provisioner's own PAT identity among them) are excluded
+# everywhere in these modes: they are not people an operator onboards, and
+# including them would make `user list` misleading the moment a second
+# service account exists.
+#
+# Zitadel's default page size is small and silent; ask for the documented
+# maximum and warn if the total still exceeds what came back, rather than
+# quietly presenting a truncated list as if it were complete.
+search_users() {
+  local extra="${1:-}" body response total returned
+  if [[ -n "$extra" ]]; then
+    body="$(printf '{"queries":[{"typeQuery":{"type":"TYPE_HUMAN"}},%s],"query":{"limit":1000}}' "$extra")"
+  else
+    body="$(printf '{"queries":[{"typeQuery":{"type":"TYPE_HUMAN"}}],"query":{"limit":1000}}')"
+  fi
+  response="$(zitadel_call POST /v2/users "$body")" || die "failed to search Zitadel users"
+  total="$(printf '%s' "$response" | yq -p json '.details.totalResult // "0"')"
+  returned="$(printf '%s' "$response" | yq -p json '(.result // []) | length')"
+  if [[ "$total" =~ ^[0-9]+$ ]] && (( total > returned )); then
+    warn "Zitadel reported ${total} matching users but returned ${returned} — this listing is TRUNCATED"
+  fi
+  printf '%s' "$response"
+}
+
+# resolve_user_id <email> — userId for a human user with exactly this email,
+# or empty. Email is the join key between Zitadel and a tenant's allowlist,
+# so this is what keeps every mode's <email> argument from ever needing to
+# become a pasted id.
+resolve_user_id() {
+  local addr="$1"
+  search_users "$(printf '{"emailQuery":{"emailAddress":"%s","method":"TEXT_QUERY_METHOD_EQUALS"}}' "$addr")" \
+    | yq -p json '(.result // [])[0].userId // ""'
+}
+
+# require_user_id <email> — resolve or die with an actionable message.
+require_user_id() {
+  local addr="$1" uid
+  uid="$(resolve_user_id "$addr")"
+  [[ -n "$uid" ]] || die "no Zitadel user with email '${addr}' — create one first: quarantine user add ${addr} --invite"
+  printf '%s' "$uid"
+}
+
+# =============================================================================
+# list-redirects: read-only counterpart to add-redirect/remove-redirect.
+# =============================================================================
+if [[ "$MODE" == "list-redirects" ]]; then
+  app_id="$(find_application_id "$name")"
+  [[ -n "$app_id" ]] \
+    || die "no Zitadel application named '${name}' found in project '${PROJECT_NAME}' — run the default (ensure) mode for '${name}' first"
+
+  list_response="$(zitadel_call POST /zitadel.application.v2.ApplicationService/ListApplications \
+    "$(printf '{"filters":[{"projectIdFilter":{"projectId":"%s"}},{"nameFilter":{"name":"%s"}}]}' "$project_id" "$name")")" \
+    || die "failed to read application '${name}'"
+
+  if [[ "$want_json" == true ]]; then
+    printf '%s' "$list_response" | yq -p json -o json \
+      "{\"app\": \"${name}\",
+        \"applicationId\": .applications[0].applicationId,
+        \"redirectUris\": (.applications[0].oidcConfiguration.redirectUris // []),
+        \"postLogoutRedirectUris\": (.applications[0].oidcConfiguration.postLogoutRedirectUris // [])}"
+  else
+    log "redirect URIs on '${name}' (${app_id}):"
+    printf '%s' "$list_response" | yq -p json '(.applications[0].oidcConfiguration.redirectUris // [])[]'
+  fi
+  exit 0
+fi
+
+# =============================================================================
+# app-add-role / app-list-roles
+#
+# Zitadel roles belong to the PROJECT, not to an individual Application —
+# quarantine-apps holds one Application per catalog app but a single, shared
+# role list. <canonical_name> therefore selects which project to act on
+# (always the shared one today) and is validated as a real catalog app so a
+# typo can't silently create a role nobody will ever see; it does NOT scope
+# the role itself. Keys are conventionally app-prefixed for that reason —
+# "lazaretto-admin", which is exactly the key lazaretto-backend's AuthService
+# scans for in the urn:zitadel:iam:org:project:<id>:roles claim.
+# =============================================================================
+if [[ "$MODE" == "app-add-role" ]]; then
+  roles_response="$(zitadel_call POST "/management/v1/projects/${project_id}/roles/_search" '{"query":{"limit":1000}}')" \
+    || die "failed to list roles on project '${PROJECT_NAME}'"
+  if printf '%s' "$roles_response" | yq -p json '(.result // [])[].key' | grep -qxF "$role"; then
+    log "role '${role}' already exists on project '${PROJECT_NAME}' (${project_id}) — nothing to do"
+    exit 0
+  fi
+  body="$(printf '{"roleKey":"%s","displayName":"%s","group":"%s"}' \
+    "$role" "${role_display_name:-$role}" "$role_group")"
+  zitadel_call POST "/management/v1/projects/${project_id}/roles" "$body" >/dev/null \
+    || die "failed to add role '${role}' to project '${PROJECT_NAME}'"
+  log "added role '${role}' to project '${PROJECT_NAME}' (${project_id})"
+  exit 0
+fi
+
+if [[ "$MODE" == "app-list-roles" ]]; then
+  roles_response="$(zitadel_call POST "/management/v1/projects/${project_id}/roles/_search" '{"query":{"limit":1000}}')" \
+    || die "failed to list roles on project '${PROJECT_NAME}'"
+  if [[ "$want_json" == true ]]; then
+    printf '%s' "$roles_response" | yq -p json -o json \
+      "{\"app\": \"${name}\",
+        \"projectId\": \"${project_id}\",
+        \"roles\": [(.result // [])[] | {\"key\": .key, \"displayName\": (.displayName // \"\"), \"group\": (.group // \"\")}]}"
+  else
+    log "roles on project '${PROJECT_NAME}' (${project_id}), shared by every app in it:"
+    printf '%s' "$roles_response" | yq -p json '(.result // [])[].key'
+  fi
+  exit 0
+fi
+
+# =============================================================================
+# user-list / user-show
+# =============================================================================
+if [[ "$MODE" == "user-list" ]]; then
+  if [[ -n "$list_query" ]]; then
+    # displayNameQuery with CONTAINS is the closest thing to a free-text
+    # filter the v2 search offers across name and login name.
+    users_response="$(search_users "$(printf '{"displayNameQuery":{"displayName":"%s","method":"TEXT_QUERY_METHOD_CONTAINS_IGNORE_CASE"}}' "$list_query")")"
+  else
+    users_response="$(search_users)"
+  fi
+
+  if [[ "$want_json" == true ]]; then
+    printf '%s' "$users_response" | yq -p json -o json \
+      "{\"users\": [(.result // [])[] | ${USER_PROJECTION}] | sort_by(.email)}"
+  else
+    printf '%s' "$users_response" | yq -p json \
+      "[(.result // [])[] | ${USER_PROJECTION}] | sort_by(.email) | .[]
+       | .email + \"\t\" + .state + \"\t\" + .displayName"
+  fi
+  exit 0
+fi
+
+if [[ "$MODE" == "user-show" ]]; then
+  users_response="$(search_users "$(printf '{"emailQuery":{"emailAddress":"%s","method":"TEXT_QUERY_METHOD_EQUALS"}}' "$email")")"
+  found="$(printf '%s' "$users_response" | yq -p json '(.result // []) | length')"
+  [[ "$found" != "0" ]] || die "no Zitadel user with email '${email}'"
+
+  if [[ "$want_json" == true ]]; then
+    printf '%s' "$users_response" | yq -p json -o json "{\"user\": ((.result // [])[0] | ${USER_PROJECTION})}"
+  else
+    printf '%s' "$users_response" | yq -p json "(.result // [])[0] | ${USER_PROJECTION} | to_entries | .[] | .key + \": \" + (.value | tostring)"
+  fi
+  exit 0
+fi
+
+# =============================================================================
+# user-add — idempotent by email.
+#
+# "Heals and exits 0" means: an existing user with this email is reported and
+# left alone, never duplicated. It deliberately does NOT overwrite an
+# existing profile from the flags passed here — a re-run of an onboarding
+# command should not quietly rename a person who has since corrected their
+# own name in the Console.
+# =============================================================================
+if [[ "$MODE" == "user-add" ]]; then
+  existing_id="$(resolve_user_id "$email")"
+  if [[ -n "$existing_id" ]]; then
+    log "Zitadel user '${email}' already exists (${existing_id}) — nothing to do"
+    log "note: an existing profile is never overwritten here; change names in the Console"
+    exit 0
+  fi
+
+  # Zitadel requires both name parts on a human profile. Defaulting them to
+  # the address's local part keeps `user add <email>` a valid one-liner while
+  # --given-name/--family-name stay the right way to do it properly.
+  local_part="${email%%@*}"
+  [[ -n "$given_name" ]] || given_name="$local_part"
+  [[ -n "$family_name" ]] || family_name="$local_part"
+
+  password_json=""
+  if [[ "$want_password_stdin" == true ]]; then
+    IFS= read -r -s supplied_password || true
+    [[ -n "$supplied_password" ]] || die "user-add --password-stdin: no password was read from stdin"
+    # Escaped, never echoed, and carried to Zitadel over stdin rather than
+    # argv (see zitadel_call_private).
+    password_json="$(printf ',"password":{"password":"%s","changeRequired":true}' \
+      "$(_json_escape_string "$supplied_password")")"
+    unset supplied_password
+  fi
+
+  # sendCode asks Zitadel to email a verification/invite code. isVerified is
+  # deliberately NOT set: marking an address verified without the person ever
+  # proving control of it defeats the point of the invite.
+  create_body="$(printf '{"username":"%s","organization":{"orgId":"%s"},"profile":{"givenName":"%s","familyName":"%s"},"email":{"email":"%s","sendCode":{}}%s}' \
+    "$email" "$org_id" "$given_name" "$family_name" "$email" "$password_json")"
+
+  if [[ -n "$password_json" ]]; then
+    create_response="$(zitadel_call_private POST /v2/users/human "$create_body")" \
+      || die "failed to create Zitadel user '${email}'"
+  else
+    create_response="$(zitadel_call POST /v2/users/human "$create_body")" \
+      || die "failed to create Zitadel user '${email}'"
+  fi
+  unset create_body password_json
+
+  new_user_id="$(printf '%s' "$create_response" | yq -p json '.userId // ""')"
+  [[ -n "$new_user_id" ]] || die "AddHumanUser did not return a userId: ${create_response}"
+  log "created Zitadel user '${email}' (${new_user_id})"
+
+  if [[ "$want_invite" == true ]]; then
+    # Best-effort by design: an environment with no SMTP configured cannot
+    # deliver the mail, and failing the whole onboarding over that would be
+    # wrong when the code can simply be handed over out of band instead.
+    if invite_response="$(zitadel_call POST "/v2/users/${new_user_id}/invite_code" '{"sendCode":{}}' 2>/dev/null)"; then
+      log "invite emailed to ${email}"
+    elif invite_response="$(zitadel_call POST "/v2/users/${new_user_id}/invite_code" '{"returnCode":{}}' 2>/dev/null)"; then
+      returned_code="$(printf '%s' "$invite_response" | yq -p json '.inviteCode // ""')"
+      warn "could not send the invite email (is SMTP configured on this Zitadel?) — give this code to ${email} out of band:"
+      warn "  invite code: ${returned_code}"
+    else
+      warn "user '${email}' was created but no invite could be issued — resend later with: quarantine user invite ${email}"
+    fi
+  fi
+  exit 0
+fi
+
+if [[ "$MODE" == "user-invite" ]]; then
+  user_id="$(require_user_id "$email")"
+  if zitadel_call POST "/v2/users/${user_id}/invite_code/resend" '{"sendCode":{}}' >/dev/null 2>&1; then
+    log "invite re-sent to ${email}"
+  elif invite_response="$(zitadel_call POST "/v2/users/${user_id}/invite_code" '{"returnCode":{}}' 2>/dev/null)"; then
+    returned_code="$(printf '%s' "$invite_response" | yq -p json '.inviteCode // ""')"
+    warn "could not send the invite email — give this code to ${email} out of band:"
+    warn "  invite code: ${returned_code}"
+  else
+    die "failed to issue an invite for '${email}' (${user_id})"
+  fi
+  exit 0
+fi
+
+if [[ "$MODE" == "user-remove" ]]; then
+  user_id="$(resolve_user_id "$email")"
+  if [[ -z "$user_id" ]]; then
+    log "no Zitadel user with email '${email}' — nothing to do"
+    exit 0
+  fi
+  zitadel_call DELETE "/v2/users/${user_id}" >/dev/null \
+    || die "failed to delete Zitadel user '${email}' (${user_id})"
+  log "deleted Zitadel user '${email}' (${user_id})"
+  log "note: this removes the IDENTITY only. Any tenant allowlist still naming ${email} is now inert but should be cleaned up: quarantine tenant member remove <tenant> ${email}"
+  exit 0
+fi
+
+# =============================================================================
+# user-grant / user-revoke — project-role grants.
+#
+# A user has at most ONE grant per project, carrying a LIST of role keys, so
+# both modes are a read-modify-write of that list rather than a create/delete
+# of a grant per role. Revoking the last role deletes the grant outright,
+# which is what leaves no empty husk behind for the next grant to trip over.
+# =============================================================================
+if [[ "$MODE" == "user-grant" || "$MODE" == "user-revoke" ]]; then
+  user_id="$(require_user_id "$email")"
+
+  # Guard against granting a role that doesn't exist: Zitadel accepts unknown
+  # role keys on a grant, and the result is a claim nobody's authorization
+  # code will ever match — a silent no-op that looks like success.
+  roles_response="$(zitadel_call POST "/management/v1/projects/${project_id}/roles/_search" '{"query":{"limit":1000}}')" \
+    || die "failed to list roles on project '${PROJECT_NAME}'"
+  if ! printf '%s' "$roles_response" | yq -p json '(.result // [])[].key' | grep -qxF "$role"; then
+    die "role '${role}' does not exist on project '${PROJECT_NAME}' — create it first: quarantine app add-role ${name} ${role}"
+  fi
+
+  grants_response="$(zitadel_call POST /management/v1/users/grants/_search \
+    "$(printf '{"query":{"limit":1000},"queries":[{"userIdQuery":{"userId":"%s"}},{"projectIdQuery":{"projectId":"%s"}}]}' "$user_id" "$project_id")")" \
+    || die "failed to search existing grants for '${email}'"
+  grant_id="$(printf '%s' "$grants_response" | yq -p json '(.result // [])[0].id // ""')"
+  current_roles_json="$(printf '%s' "$grants_response" | yq -p json -o json '(.result // [])[0].roleKeys // []')"
+
+  if [[ "$MODE" == "user-grant" ]]; then
+    new_roles_json="$(printf '%s' "$current_roles_json" | yq -p json -o json ". + [\"${role}\"] | unique" -)"
+  else
+    new_roles_json="$(printf '%s' "$current_roles_json" | yq -p json -o json "[.[] | select(. != \"${role}\")]" -)"
+  fi
+
+  if [[ "$new_roles_json" == "$current_roles_json" ]]; then
+    log "${MODE}: '${email}' already matches the desired roles on '${name}' — nothing to do"
+    exit 0
+  fi
+
+  new_role_count="$(printf '%s' "$new_roles_json" | yq -p json 'length')"
+  if [[ -z "$grant_id" ]]; then
+    zitadel_call POST "/management/v1/users/${user_id}/grants" \
+      "$(printf '{"projectId":"%s","roleKeys":%s}' "$project_id" "$new_roles_json")" >/dev/null \
+      || die "failed to create a grant for '${email}' on '${name}'"
+    log "granted '${role}' to ${email} on '${name}'"
+  elif (( new_role_count == 0 )); then
+    zitadel_call DELETE "/management/v1/users/${user_id}/grants/${grant_id}" >/dev/null \
+      || die "failed to delete the now-empty grant for '${email}'"
+    log "revoked '${role}' from ${email} — that was the last role, so the grant itself was removed"
+  else
+    zitadel_call PUT "/management/v1/users/${user_id}/grants/${grant_id}" \
+      "$(printf '{"roleKeys":%s}' "$new_roles_json")" >/dev/null \
+      || die "failed to update the grant for '${email}' on '${name}'"
+    log "${MODE#user-}d '${role}' for ${email} on '${name}'"
+  fi
+  exit 0
+fi
 
 # =============================================================================
 # add-redirect / remove-redirect: shared-Application redirect-URI

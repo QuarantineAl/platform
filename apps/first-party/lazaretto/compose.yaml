@@ -41,8 +41,40 @@ services:
       - edge
     volumes:
       - lazaretto-data:/app/data
+    # Per-instance resource ceilings, from measurements on the live dev host
+    # (x86_64, 4 vCPU / 7.9 GB) reading cgroup `anon` — not `docker stats` or
+    # memory.current, both of which mislead here by counting ~430 MiB of
+    # reclaimable page cache. An idle backend costs 53 MiB; a concurrent agent
+    # turn costs ~173 MiB light and ~237-255 MiB heavy, near-linear and
+    # slightly sub-linear under concurrency. Four concurrent heavy turns
+    # peaked at 999 MiB.
+    #
+    # The default matters most for CLI_MAX_CONCURRENT: the backend defaults it
+    # to 4 PER PROCESS, so twenty per-tenant instances would permit eighty
+    # concurrent turns — roughly 20 GiB of unbounded demand against a host
+    # with no swap. provisioners/lazaretto-tenant.sh scales all three to the
+    # tenant (1-2 for a solo tenant, 4 for a team) via
+    # mem = 250 MiB x concurrency + 200 MiB headroom; the defaults here keep
+    # the shared deployment and PR sandboxes at today's concurrency of 4, with
+    # a ceiling comfortably above that measured 999 MiB peak.
+    mem_limit: ${LAZARETTO_MEM_LIMIT:-1200m}
+    # Fork-bomb guard: one runaway session should not be able to take the host
+    # down with it. Generous next to real usage (a turn spawns a CLI and its
+    # children, not hundreds of processes).
+    pids_limit: ${LAZARETTO_PIDS_LIMIT:-1024}
     environment:
       FRONTEND_ORIGIN: https://${SUBDOMAIN:-lazaretto}.${DOMAIN}
+      # backend/src/cli-agents/cli-runtime.service.ts; unset there means 4.
+      CLI_MAX_CONCURRENT: ${LAZARETTO_CLI_MAX_CONCURRENT:-4}
+      # AES-256-GCM master key for stored credentials (SSH keys, GitHub/npm
+      # tokens). Declared in catalog.yaml's generated_secrets and generated
+      # once — per app for a manifest deployment, per TENANT for a per-tenant
+      # instance, so one tenant's stored credentials are not decryptable with
+      # another's. Legitimately empty on a deployment that predates the
+      # feature: backend/src/common/secret-crypto.ts validates the format at
+      # boot only when set, and the Credentials feature is simply unreachable
+      # without it rather than crashing the whole backend.
+      LAZARETTO_CREDENTIALS_KEY: ${LAZARETTO_CREDENTIALS_KEY:-}
       # Deliberately unconditional, not ${SUBDOMAIN}-toggled: this fragment
       # is only ever invoked behind Traefik + oauth2-proxy-lazaretto (never
       # bare local dev, which instead runs `npm run start:dev` + Vite
