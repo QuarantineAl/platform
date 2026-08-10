@@ -458,8 +458,35 @@ cmd_start() {
 
   "${repo_root}/provisioners/zitadel.sh" ensure-features "$repo_root" "$env" "$plaintext"
 
-  log "starting observability"
-  qcompose "$env" --profile observability up -d
+  # Observability (otel-collector + the six-service SigNoz stack) is OPT-IN
+  # per environment, via `observability: true` in that environment's
+  # manifest.yaml. It used to come up unconditionally on every start, which
+  # is ~1.48 GiB of the ~2.0 GiB shared-infra footprint — the single largest
+  # line item on a host that also has to fit per-tenant Lazaretto instances,
+  # and dead weight on an environment nobody is currently instrumenting
+  # (nothing in the app pushes to the collector today; see
+  # PER_TENANT_CONTAINER_PLAN.md §9).
+  #
+  # DELIBERATELY SKIP-ONLY: `false` means "do not bring it up", never "tear
+  # it down". This is a considered deviation from how manifest apps are
+  # reconciled a few lines below, where dropping an app also stops it. The
+  # reason is blast radius: observability is frequently brought up by hand
+  # while debugging something, and a reconcile loop that silently killed a
+  # running SigNoz stack — on prod, mid-investigation, as a side effect of an
+  # unrelated `quarantine start` — is a far worse failure than leaving seven
+  # containers running. Turning it off is therefore two explicit steps: set
+  # the flag false, then stop it yourself. `quarantine status` still lists
+  # those containers and `quarantine destroy` still removes them, precisely
+  # so a stack running against a false flag stays visible and removable.
+  local observability_enabled
+  observability_enabled="$(yq_get "$manifest" '.observability')"
+  if [[ "$observability_enabled" == "true" ]]; then
+    log "starting observability"
+    qcompose "$env" --profile observability up -d
+  else
+    log "observability not enabled for '${env}' — skipping (set 'observability: true' in environments/${env}/manifest.yaml to enable)"
+    log "note: this never stops observability that is already running — 'quarantine status' will still show it"
+  fi
 
   # No manifest flag for this on purpose: whether the CI runner exists for
   # an environment is decided by that environment's own compose.yaml
