@@ -303,8 +303,18 @@ export_tenant_secrets() {
 # CLI_MAX_CONCURRENT matters most: the backend defaults it to 4 PER PROCESS, so
 # twenty instances would allow eighty concurrent turns — roughly 20 GiB of
 # unbounded demand against a host with no swap.
+#
+# tenant_up <tenant> [pull]
+#
+# `pull` re-fetches the image tag before recreating, and is passed ONLY by the
+# upgrade verbs. Deliberately not the default: `start` after a host reboot must
+# work from the local image cache, and making every bring-up depend on GHCR
+# being reachable and authenticated would turn a network blip into a tenant
+# that will not start. Conversely an upgrade without it is a silent no-op the
+# moment builds stop happening on this same host — compose sees an unchanged
+# local image ID for the tag and recreates nothing.
 tenant_up() {
-  local t="$1" version concurrency
+  local t="$1" pull="${2:-}" version concurrency
   version="$(conf_get "$t" version)"; version="${version:-$env}"
   concurrency="$(conf_get "$t" concurrency)"; concurrency="${concurrency:-2}"
 
@@ -320,11 +330,30 @@ tenant_up() {
   export LAZARETTO_PIDS_LIMIT=512
   export_tenant_secrets "$t"
 
-  log "bringing up tenant '${t}' (project $(tenant_project "$t"), image tag ${version}, concurrency ${concurrency}, mem ${LAZARETTO_MEM_LIMIT})"
+  # --wait is what makes a fleet-wide rollout safe to automate: without it
+  # `up -d` returns the moment containers are STARTED, so a backend that boots
+  # and dies still looks like success and upgrade-all marches on through every
+  # remaining tenant. With it, compose blocks on the backend's healthcheck and
+  # exits non-zero if the container goes unhealthy or exits — which, under
+  # `set -e`, stops the loop at the first casualty and leaves the rest of the
+  # fleet on the image that still works.
+  #
+  # The timeout is generous against the backend's own healthcheck
+  # (start_period 15s + 5 x interval 10s -> ~65s worst case before it is
+  # declared unhealthy) so a slow-but-fine boot on a loaded host is never
+  # mistaken for a failure.
+  local -a up_args=(up -d --wait --wait-timeout 180)
+  [[ "$pull" == pull ]] && up_args+=(--pull always)
+
+  log "bringing up tenant '${t}' (project $(tenant_project "$t"), image tag ${version}, concurrency ${concurrency}, mem ${LAZARETTO_MEM_LIMIT}${pull:+, pulling})"
   qcompose_scoped "$(tenant_project "$t")" "$env" \
     -f "$COMPOSE_APP" -f "$COMPOSE_PROXY" \
-    --profile "$APP_NAME" up -d
+    --profile "$APP_NAME" "${up_args[@]}"
 
+  # Still checked separately even with --wait: the sidecar has no healthcheck,
+  # so --wait only requires it to be RUNNING, and its specific failure (an
+  # unreadable allowlist) deserves the pointed diagnostic below rather than a
+  # generic compose timeout.
   assert_proxy_healthy "$t"
 }
 
@@ -567,20 +596,32 @@ case "$VERB" in
     version="${version_in:-$(conf_get "$tenant" version)}"; version="${version:-$env}"
     concurrency="$(conf_get "$tenant" concurrency)"; concurrency="${concurrency:-2}"
     conf_write "$tenant" "$version" "$concurrency"
-    tenant_up "$tenant"
+    tenant_up "$tenant" pull
     log "tenant '${tenant}' now on image tag '${version}'"
     exit 0 ;;
   upgrade-all)
     # Per-tenant instances live outside `quarantine start`'s reconciliation
     # loop — nothing else will ever pick a new version up for them.
+    #
+    # Sequential and fail-fast, by way of `set -e` plus tenant_up's --wait: one
+    # tenant is recreated and proven healthy before the next is touched, so a
+    # bad image costs exactly one tenant instead of all of them. The tenants
+    # already rolled stay rolled — this is a stop, not a rollback — so the
+    # recovery is to fix forward, or pin the fleet back with
+    # `tenant upgrade <name> --version <sha>` against the SHA tag CI pushes
+    # alongside the environment tag.
+    upgraded=0
+    total="$(all_tenants | grep -c '^' || true)"
     while IFS= read -r t; do
       [[ -z "$t" ]] && continue
       version="${version_in:-$(conf_get "$t" version)}"; version="${version:-$env}"
       concurrency="$(conf_get "$t" concurrency)"; concurrency="${concurrency:-2}"
       conf_write "$t" "$version" "$concurrency"
-      tenant_up "$t"
+      log "[$(( upgraded + 1 ))/${total}] upgrading tenant '${t}'"
+      tenant_up "$t" pull
+      upgraded=$(( upgraded + 1 ))
     done < <(all_tenants)
-    log "upgrade-all complete"
+    log "upgrade-all complete: ${upgraded}/${total} tenant(s) upgraded"
     exit 0 ;;
   purge)
     if [[ "$want_yes" != true ]]; then
