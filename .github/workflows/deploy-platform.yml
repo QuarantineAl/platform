@@ -26,7 +26,12 @@ on:
         default: dev
 
 permissions:
-  contents: read
+  # write + PRs so the reconcile step below can push a branch carrying
+  # whatever secrets this host generated, and open a PR for it. It never
+  # pushes main — main requires a pull request, and generated secrets should
+  # go through one like anything else.
+  contents: write
+  pull-requests: write
 
 # Serialised per host. `quarantine start` takes a non-blocking `flock -n` on
 # the environment (lib/common.sh acquire_lock) and DIES rather than waiting,
@@ -60,6 +65,7 @@ jobs:
     env:
       QUARANTINE_CONFIG_FILE: /opt/quarantine/quarantine.yaml
       QUARANTINE_REPO_PATH: /opt/quarantine/repo
+      TARGET_ENV: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'dev' }}
       # Load-bearing, and this workflow is the first thing in the org to set
       # it. `quarantine start` reconciles the CI runner pool, and this job is
       # running INSIDE that pool — `up -d runner` would recreate the container
@@ -121,28 +127,155 @@ jobs:
           sudo mv "${age_tmp}/age/age" "${age_tmp}/age/age-keygen" /usr/local/bin/
           rm -rf "$age_tmp"
 
-      # `quarantine upgrade` would fail on a dirty tree anyway, deep inside a
-      # `merge --ff-only`, with git's own wording about local changes being
-      # overwritten. Checking here turns that into one sentence naming the
-      # files and what to do — this failure has a history (QuarantineAl/platform#47)
-      # and the recovery is never "discard": a host's uncommitted
-      # secrets.sops.yaml can be the only copy of a key that, once lost, makes
-      # everything it encrypted unreadable.
-      - name: Refuse to deploy onto a dirty checkout
+      # The host writes secrets nobody commits. `quarantine start` generates a
+      # missing one, writes it into environments/<env>/secrets.sops.yaml, and
+      # only logs a reminder; `tenant add`/`upgrade-all` do the same for a
+      # per-tenant credentials key. Five further paths write that file with no
+      # reminder at all. So the tree goes dirty on its own, and stays dirty.
+      #
+      # That is not a tidiness problem. Every deploy in the org opens with
+      # `git pull --ff-only` in this checkout, so the next commit touching
+      # environments/ aborts the pull and fails an unrelated repo's deploy —
+      # #43. Worse, a generated key exists ONLY here until it is committed:
+      # prod's shared-instance credentials_key sat uncommitted for days, and
+      # losing it makes every credential it encrypted permanently unreadable
+      # (#47, recovered by hand).
+      #
+      # This step is the automation of that hand recovery. It deliberately
+      # does NOT push main — main requires a pull request, and a host that
+      # could push to main could push anything to the repo that configures
+      # BOTH hosts. It opens a PR and carries on.
+      - name: Reconcile host-generated state into git
         working-directory: ${{ env.QUARANTINE_REPO_PATH }}
+        env:
+          GH_PUSH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          dirty="$(git status --porcelain -- environments/ || true)"
-          if [[ -n "$dirty" ]]; then
-            echo "::error::Host checkout has uncommitted changes under environments/ — refusing to deploy."
-            echo "$dirty"
-            echo
-            echo "These are almost certainly secrets this host generated and nobody committed."
-            echo "Do NOT discard them without checking: compare against origin/main first, and if"
-            echo "they differ, the host holds the only copy. See QuarantineAl/platform#47."
-            exit 1
+          git fetch -q origin main
+
+          # Phase 1 — settle anything already upstream. Once a previous run's PR
+          # merges, the host's local edit becomes byte-identical to origin/main,
+          # so it can be settled losslessly. That is what makes this
+          # self-healing: merge the PR, and the next deploy cleans the tree by
+          # itself. `git diff --quiet` against origin/main is the proof, and is
+          # the same check used to recover the hosts by hand in #47.
+          #
+          # `checkout origin/main --`, NOT `checkout --`. They differ in a way
+          # that matters on a live host: a bare `checkout --` restores from
+          # HEAD, which is still the OLD commit here, so it wipes the generated
+          # secret off disk and only gets it back when the merge below lands.
+          # Measured: that leaves a window where the host holds no copy of its
+          # own key, and a failure inside it means the next `quarantine start`
+          # generates a different one and everything encrypted with the old one
+          # is unreadable. Checking out origin/main's version writes identical
+          # bytes, so the file is never without its secret, and the
+          # fast-forward still succeeds because the staged content already
+          # equals the merge target.
+          restored=0
+          while IFS= read -r path; do
+            [[ -n "$path" ]] || continue
+            if git diff --quiet origin/main -- "$path"; then
+              echo "already upstream, settling: ${path}"
+              git checkout origin/main -- "$path"
+              restored=$(( restored + 1 ))
+            fi
+          done < <(git diff --name-only -- environments/)
+          [[ "$restored" -eq 0 ]] || echo "restored ${restored} file(s) that origin/main already carries"
+
+          # Phase 2 — whatever is left exists only on this host.
+          mapfile -t paths < <(
+            { git diff --name-only -- environments/
+              git ls-files --others --exclude-standard -- environments/
+            } | sort -u
+          )
+          if [[ "${#paths[@]}" -eq 0 ]]; then
+            echo "checkout is clean — nothing to reconcile"
+            exit 0
           fi
-          echo "checkout is clean"
+          printf 'host-only state: %s\n' "${paths[@]}"
+
+          # GitHub refuses pushes from a shallow repository, and install.sh
+          # clones with --depth 1, so both hosts are shallow. Deepening is
+          # one-time and harmless — the repo is small, and it also fixes
+          # `git describe` for `quarantine version`.
+          if [[ "$(git rev-parse --is-shallow-repository)" == "true" ]]; then
+            echo "unshallowing (required before any push)"
+            git fetch -q --unshallow origin main
+          fi
+
+          # Built with plumbing rather than `git add && git commit`, and this
+          # is the crux of the whole step: commit-tree writes an object graph
+          # WITHOUT touching HEAD, the index, or the working tree. The host
+          # keeps running exactly as it is, still holding the only copy of
+          # these secrets, while the copy is safely pushed. A branch-and-
+          # commit here would move the file out from under a live deployment
+          # the moment we switched back to main.
+          #
+          # Identity comes from the environment because these hosts have no
+          # git identity configured and this must not create one.
+          export GIT_AUTHOR_NAME="github-actions[bot]" \
+                 GIT_COMMITTER_NAME="github-actions[bot]" \
+                 GIT_AUTHOR_EMAIL="41898282+github-actions[bot]@users.noreply.github.com" \
+                 GIT_COMMITTER_EMAIL="41898282+github-actions[bot]@users.noreply.github.com"
+
+          tmpindex="$(mktemp -u)"
+          git read-tree --index-output="$tmpindex" HEAD
+          for path in "${paths[@]}"; do
+            blob="$(git hash-object -w "$path")"
+            GIT_INDEX_FILE="$tmpindex" git update-index --add --cacheinfo "100644,${blob},${path}"
+          done
+          tree="$(GIT_INDEX_FILE="$tmpindex" git write-tree)"
+          rm -f "$tmpindex"
+
+          branch="host-state/${TARGET_ENV}-${GITHUB_RUN_ID}"
+          msg="$(printf '%s\n\n%s\n' \
+            "Persist ${TARGET_ENV} host-generated state" \
+            "Written by the ${TARGET_ENV} host during a platform deploy and not present in main. Generated secrets exist only on that host until this merges.")"
+          commit="$(git commit-tree "$tree" -p HEAD -m "$msg")"
+
+          # The token reaches git through a credential helper reading the
+          # environment, so it is never an argument and never lands in a log.
+          # The helper text below contains the variable's NAME, not its value.
+          # shellcheck disable=SC2016 # must NOT expand here — git runs this
+          # helper itself and it reads the token from its own environment
+          git -c credential.helper='!f() { echo username=x-access-token; echo "password=${GH_PUSH_TOKEN}"; }; f' \
+            push -q origin "${commit}:refs/heads/${branch}"
+          echo "pushed ${branch}"
+
+          body="$(
+            printf '%s\n\n' "Opened automatically by the ${TARGET_ENV} platform deploy."
+            printf '%s\n\n' "These files were written by the ${TARGET_ENV} host and are not in main. Until this merges they exist on that host and nowhere else — if any of them is a newly generated key, losing the host loses everything it encrypts."
+            printf '%s\n\n' "Merging also unblocks that host: the next deploy sees its local edit is byte-identical to main and restores it automatically, leaving the checkout clean."
+            printf '%s\n' "Files:"
+            printf -- "- \`%s\`\n" "${paths[@]}"
+          )"
+
+          # yq (installed above) builds the JSON so no value needs hand-
+          # escaping; strenv() is this repo's documented idiom for exactly
+          # that. The curl config is a file rather than inline flags so the
+          # token is never an argument.
+          reqdir="$(mktemp -d)"
+          export TITLE="Persist ${TARGET_ENV} host-generated state"
+          export HEAD_REF="$branch"
+          export BODY="$body"
+          # shellcheck disable=SC2016 # strenv() is yq syntax, not shell
+          yq -n -o=json '{"title": strenv(TITLE), "head": strenv(HEAD_REF), "base": "main", "body": strenv(BODY)}' > "${reqdir}/pr.json"
+
+          {
+            printf 'url = "https://api.github.com/repos/%s/pulls"\n' "$GITHUB_REPOSITORY"
+            printf 'request = "POST"\n'
+            printf 'header = "Authorization: Bearer %s"\n' "$GH_PUSH_TOKEN"
+            printf 'header = "Accept: application/vnd.github+json"\n'
+            printf 'data = "@%s/pr.json"\n' "$reqdir"
+          } > "${reqdir}/curlrc"
+          chmod 600 "${reqdir}/curlrc"
+
+          if url="$(curl -fsS --config "${reqdir}/curlrc" | yq -p=json -r '.html_url')"; then
+            echo "::warning::This host had uncommitted state; opened ${url} to persist it. Merge it — the next deploy then cleans the checkout automatically."
+          else
+            echo "::warning::Pushed ${branch} but could not open a PR for it. Open one by hand — that branch holds state that exists nowhere else."
+          fi
+          rm -rf "$reqdir"
 
       - name: Record the commit being deployed from
         working-directory: ${{ env.QUARANTINE_REPO_PATH }}
