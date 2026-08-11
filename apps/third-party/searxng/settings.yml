@@ -54,24 +54,52 @@ search:
 # had been degrading quietly: an hour earlier duckduckgo alone was still
 # answering, which looked fine and left no redundancy at all.
 #
-# The three below were picked by running each candidate against this host's
-# own IP in a throwaway instance and keeping the ones that actually returned
-# results (mwmbl 51, bing 10, seznam 6). yep answered "access denied" and
-# mojeek returned nothing, so neither is here.
+# Every engine below was picked by running it against this host's own IP in
+# a throwaway instance and keeping only the ones that actually returned
+# results. Free, no API key, no signup. Result counts at the time of
+# measurement, for one query:
 #
-# The default scrapers are deliberately left enabled: their suspensions
-# expire, and they contribute again whenever they are willing to. This adds
-# a floor rather than replacing them.
+#   mwmbl 51 · yandex 15 · encyclosearch 15 · bing 10 · duckduckgo web 10
+#   yacy 10 · zapmeta 9 · seznam 6
 #
-# Worth knowing: bing is scraped too, so it can eventually block the same
-# way. The durable fix is a keyed API engine — google cse with a real
-# api_key/engine_id, or a Brave Search API key — which is a per-deployment
-# credential decision rather than something to hardcode here. mwmbl has its
-# own API and is the least likely of the three to start refusing.
+# Measured and rejected: yahoo (HTTP protocol error), baidu/sogou/qwant
+# (CAPTCHA), dogpile/fireball/yep (access denied), and mojeek, crowdview and
+# searchmysite — which answered without error but contributed nothing, so
+# they would only add latency to every query.
+#
+# `duckduckgo web` is not a typo for `duckduckgo`. They are separate
+# implementations against different endpoints, and only the plain one is
+# CAPTCHA-blocked here — so this is free coverage that the default set does
+# not get.
+#
+# Chosen for INDEPENDENCE as much as for volume: yandex, mwmbl, yacy and
+# bing run their own crawlers and share no infrastructure, so they cannot
+# all start refusing at once the way the shipped default set did — every one
+# of which was blocked simultaneously, taking search to zero.
+#
+# The blocked defaults stay enabled on purpose: suspensions expire and they
+# rejoin whenever they are willing to. brave already came back this way.
+# This is a floor under them, not a replacement.
+#
+# bing and yandex are scraped and can block again in time. The durable
+# answer is a keyed API engine — google cse with a real api_key/engine_id,
+# or a Brave Search API key, both of which have free tiers — but that is a
+# per-deployment credential decision rather than something to hardcode here.
+# mwmbl and yacy have their own APIs and are the least likely to refuse.
 engines:
   - name: bing
     disabled: false
   - name: mwmbl
     disabled: false
   - name: seznam
+    disabled: false
+  - name: duckduckgo web
+    disabled: false
+  - name: yandex
+    disabled: false
+  - name: encyclosearch
+    disabled: false
+  - name: yacy
+    disabled: false
+  - name: zapmeta
     disabled: false
