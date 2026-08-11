@@ -1,0 +1,40 @@
+# apps/third-party/searxng/settings.yml — mounted at /etc/searxng/settings.yml
+#
+# `use_default_settings: true` means this file is an *overlay*: everything not
+# named here keeps the image's own default, so upgrading the image picks up new
+# engines and fixes instead of freezing whatever the defaults looked like on
+# the day this was written. Only the three deviations below are ours.
+#
+# The container's entrypoint only writes a settings.yml from its template when
+# one does not already exist, so mounting this file wins outright — including
+# over the entrypoint's `ultrasecretkey` substitution, which is why the secret
+# comes from the environment instead (see server.secret_key below).
+use_default_settings: true
+
+server:
+  # NOT set here. searx/settings_defaults.py declares secret_key with
+  # environ_name='SEARXNG_SECRET', so the value arrives from the environment
+  # and never lands in a file in this repo or on the host's disk. The platform
+  # generates and persists it via catalog.yaml's generated_secrets.
+
+  # Off because this instance is not internet-facing: it listens only on the
+  # internal `edge` network and is reachable solely by Lazaretto's MCP search
+  # server. The limiter is SearXNG's bot defence and it rejects exactly the
+  # traffic we want — programmatic, no browser cookies — with 403s. Leaving it
+  # on is the single most common reason a self-hosted SearXNG returns 403 to
+  # an API client.
+  #
+  # This is safe ONLY as long as nothing routes this container through
+  # Traefik. If it is ever given a Host() rule, turn this back on and add the
+  # valkey/redis the limiter needs for its counters.
+  limiter: false
+
+search:
+  # The whole reason this app exists. The image ships `formats: [html]` and
+  # leaves json commented out (verified against
+  # /usr/local/searxng/searx/settings.yml in the pinned image), so without
+  # this override every API call comes back as a web page and the tool loop
+  # silently gets nothing useful.
+  formats:
+    - html
+    - json
