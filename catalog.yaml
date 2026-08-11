@@ -116,3 +116,34 @@ apps:
       which could front it with Zitadel later by flipping needs_oidc to
       true — deferred since the current small number of trusted operators
       doesn't need it yet.
+
+  - name: searxng
+    kind: app
+    compose_path: apps/third-party/searxng/compose.yaml
+    needs_db: false
+    needs_oidc: false
+    generated_secrets:
+      # SearXNG signs its own session/state with this. Delivered as an env
+      # var, never written into settings.yml — searx/settings_defaults.py
+      # declares secret_key with environ_name='SEARXNG_SECRET' — so it stays
+      # out of this repo and off the host's disk. Rotating it is harmless:
+      # nothing is encrypted at rest with it, unlike lazaretto's
+      # credentials_key.
+      - key: searxng_secret
+        env: SEARXNG_SECRET
+        generator: alnum32
+    notes: >-
+      Self-hosted metasearch, added so Lazaretto's Ollama tool loop has a
+      web-search tool whose queries never leave this host — the alternative
+      being a third-party search API key or Ollama's hosted endpoint, both
+      of which send every query off the infrastructure. Deliberately has NO
+      subdomain: it is the one catalog app with no Traefik router and no
+      oauth2-proxy, because nothing human browses it. Its only client is the
+      MCP search server Lazaretto spawns, which reaches it over the internal
+      edge network at http://quarantine-searxng:8080. That containment is
+      what makes disabling SearXNG's bot limiter safe (the limiter 403s
+      exactly the programmatic traffic we want) — read
+      apps/third-party/searxng/settings.yml before giving this a Host()
+      rule. One shared instance serves the shared Lazaretto and every
+      per-tenant instance: search is stateless and SearXNG logs no queries
+      by default, so there is nothing tenant-specific to keep apart.
