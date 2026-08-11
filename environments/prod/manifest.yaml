@@ -22,3 +22,4 @@ apps:
   - name: portainer
   - name: lazaretto
     version: prod
+  - name: searxng
