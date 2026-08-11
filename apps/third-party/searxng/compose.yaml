@@ -1,0 +1,69 @@
+# apps/third-party/searxng/compose.yaml — internal only (catalog.yaml: searxng)
+#
+# A self-hosted metasearch engine, added for one reason: it gives Lazaretto's
+# Ollama tool loop a web-search tool whose queries never leave this host. The
+# alternatives were a third-party search API (Brave/Tavily — an API key, and
+# every query leaving the infrastructure) or Ollama's hosted web_search
+# endpoint (same, plus an ollama.com account). For a platform whose whole
+# premise is per-tenant isolation, keeping search in-house is the consistent
+# choice.
+#
+# NO TRAEFIK LABELS, ON PURPOSE. Unlike every other app in this catalog this
+# one has no subdomain, no router and no oauth2-proxy: nothing human browses
+# it. Its only client is the MCP search server that Lazaretto spawns, which
+# reaches it over the internal `edge` network at
+# http://quarantine-searxng:8080. That is also what makes `limiter: false` in
+# settings.yml safe — see the comment there before adding any Host() rule.
+#
+# One shared instance serves the shared Lazaretto and every per-tenant
+# instance. Search is stateless and SearXNG logs no queries by default, so
+# there is nothing tenant-specific to keep apart here — unlike the per-tenant
+# credentials keys, which very much are.
+#
+# No valkey/redis sidecar: that dependency exists only to back the rate
+# limiter, which is off.
+#
+# PIN CHECKPOINT: searxng/searxng:2026.8.10-0a118066d (verified 2026-08-11
+# against Docker Hub's tags API — SearXNG publishes rolling <date>-<sha> tags
+# with no LTS track, so this is simply the newest at pin time).
+
+services:
+  searxng:
+    image: searxng/searxng:${SEARXNG_VERSION:-2026.8.10-0a118066d}
+    container_name: quarantine-searxng
+    restart: unless-stopped
+    profiles: [searxng]
+    networks:
+      - edge
+    environment:
+      # Generated and persisted by the platform (catalog.yaml:
+      # generated_secrets), never written into settings.yml. SearXNG signs
+      # its own session/state with this; rotating it is harmless.
+      - SEARXNG_SECRET=${SEARXNG_SECRET}
+      # SearXNG builds absolute URLs from this. Nothing consumes them here
+      # (no browser, no OpenSearch descriptor), but leaving it unset makes
+      # the startup logs claim a public URL this instance does not have.
+      - SEARXNG_BASE_URL=http://quarantine-searxng:8080/
+    volumes:
+      # Read-only: the entrypoint only writes a settings.yml when none
+      # exists, so mounting ours read-only both wins and stays honest about
+      # this file being repo-owned rather than container-owned.
+      - ./settings.yml:/etc/searxng/settings.yml:ro
+    # The image ships no healthcheck of its own (Config.Healthcheck is null,
+    # confirmed via docker inspect), unlike uptime-kuma's. wget is present in
+    # the image, so this probes the real search path rather than just the
+    # port: a SearXNG whose settings failed to parse still accepts TCP.
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'wget -q -O /dev/null "http://localhost:8080/search?q=ping&format=json" || exit 1',
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+networks:
+  edge:
+    external: true
