@@ -81,6 +81,15 @@ services:
       OAUTH2_PROXY_REDIRECT_URL: https://status.${DOMAIN}/oauth2/callback
       OAUTH2_PROXY_SET_XAUTHREQUEST: "true"
       OAUTH2_PROXY_SKIP_PROVIDER_BUTTON: "true"
+      # Deliberately no offline_access / COOKIE_REFRESH here, unlike the
+      # lazaretto instance below. Nothing downstream verifies the forwarded
+      # token: this proxy is pure access control in front of Uptime Kuma,
+      # which never sees an id_token and could not check its expiry if it
+      # did. The stale-token failure that made those necessary for lazaretto
+      # (its backend verifies the JWT and rejects an expired one) has no
+      # equivalent here, and this consumer is not currently in either
+      # environment's manifest — so it is left alone rather than changed
+      # untested.
       OAUTH2_PROXY_SCOPE: "openid email profile"
     networks:
       - edge
@@ -249,7 +258,36 @@ services:
       # exactly the claim-key pattern lazaretto-backend's AuthService scans
       # for — it never needs to know the shared quarantine-apps project's
       # id statically either.
-      OAUTH2_PROXY_SCOPE: "openid email profile urn:zitadel:iam:user:resourceowner urn:zitadel:iam:org:projects:roles"
+      #
+      # offline_access asks Zitadel for a REFRESH token, which is what makes
+      # COOKIE_REFRESH below able to mint a new id_token without bouncing the
+      # user through a login. Without it, oauth2-proxy has nothing to refresh
+      # with and falls back to a full re-authentication redirect — which
+      # works, but turns a silent renewal into a visible interruption, and on
+      # a fetch it cannot happen at all.
+      #
+      # Safe to ask for: provisioners/zitadel.sh already creates every OIDC
+      # application with OIDC_GRANT_TYPE_REFRESH_TOKEN in its grantTypes, so
+      # the client is permitted to use one. No Zitadel-side change is needed.
+      OAUTH2_PROXY_SCOPE: "openid email profile urn:zitadel:iam:user:resourceowner urn:zitadel:iam:org:projects:roles offline_access"
+      # Refresh the session — and the id_token it forwards — every hour.
+      #
+      # Without this, oauth2-proxy NEVER refreshes: it keeps forwarding the
+      # id_token minted at login for as long as the cookie lives (7 days by
+      # default). Zitadel's id_token expires long before that, so a browser
+      # ends up holding a cookie oauth2-proxy accepts while lazaretto-backend
+      # rejects the token it carries — '"exp" claim timestamp check failed',
+      # on every request, until the user manually signs out. Reported from
+      # prod, and the reason lazaretto now has a /session-expired recovery
+      # path at all.
+      #
+      # 1h is chosen to sit well under Zitadel's id_token lifetime (12h by
+      # default) rather than to be as long as possible: the value has to stay
+      # below that lifetime to be any use, and a shorter window costs only a
+      # token exchange. If Zitadel's token lifetimes are ever lowered, lower
+      # this first. It must also stay below COOKIE_EXPIRE (unset, so
+      # oauth2-proxy's own 168h default), which it comfortably is.
+      OAUTH2_PROXY_COOKIE_REFRESH: 1h
     networks:
       - edge
     volumes:
