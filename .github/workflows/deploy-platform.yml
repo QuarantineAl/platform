@@ -1,0 +1,193 @@
+name: Deploy platform
+
+# Until this existed, a merge to main reached the hosts only by accident:
+# QuarantineAl/.github's deploy-app.yml opens with `git pull --ff-only` in
+# /opt/quarantine/repo, so a platform change shipped whenever some *other*
+# repo happened to deploy — and `quarantine start` never ran at all, so
+# nothing was reconciled. Anything nobody pulled by hand simply sat in main.
+#
+# Unlike an app deploy this builds and pushes nothing. Platform ships shell
+# and compose fragments, and the thing being deployed already lives at
+# /opt/quarantine/repo on the runner's own host (the runner container
+# bind-mounts /opt/quarantine at an identical path and runs as uid 0). The
+# `git pull` IS the deploy; `quarantine start` is what makes it take effect.
+
+on:
+  push:
+    branches: [main]
+  # prod is deliberately NOT deployed by the push trigger — see the job's
+  # `runs-on` for the reasoning. Dispatch it explicitly.
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Which host to reconcile
+        type: choice
+        options: [dev, prod]
+        default: dev
+
+permissions:
+  contents: read
+
+# Serialised per host. `quarantine start` takes a non-blocking `flock -n` on
+# the environment (lib/common.sh acquire_lock) and DIES rather than waiting,
+# so two overlapping runs would not queue — the second would just fail. Two
+# hosts still proceed in parallel: they hold different locks on different
+# machines.
+concurrency:
+  group: deploy-platform-${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'dev' }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # Only two self-hosted labels exist, `quarantine-dev` and `quarantine-prod`,
+    # emitted by the CLI itself (bin/quarantine's RUNNER_LABELS) into the env
+    # file the runner compose reads. The label picks the HOST; it does not tell
+    # the CLI which environment to act on — that comes from the host's own
+    # /opt/quarantine/quarantine.yaml, and there is no --env flag on `start`.
+    # So targeting is entirely a matter of which runner picks the job up.
+    #
+    # A push to main goes to dev only. Auto-reconciling prod is a materially
+    # bigger decision than auto-deploying an app: `quarantine start` reconciles
+    # traefik, postgres, zitadel and observability, so a bad platform merge
+    # would take the identity provider and the database with it, for every
+    # tenant at once. Dev running the same code first is the whole point of
+    # having dev. To make prod automatic, replace the expression below with
+    # a matrix over [dev, prod] — everything else here already works for both.
+    runs-on:
+      - self-hosted
+      - quarantine-${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'dev' }}
+
+    env:
+      QUARANTINE_CONFIG_FILE: /opt/quarantine/quarantine.yaml
+      QUARANTINE_REPO_PATH: /opt/quarantine/repo
+      # Load-bearing, and this workflow is the first thing in the org to set
+      # it. `quarantine start` reconciles the CI runner pool, and this job is
+      # running INSIDE that pool — `up -d runner` would recreate the container
+      # executing these very steps, killing the job that asked for it
+      # (confirmed empirically as "The operation was canceled"). See the
+      # comment at bin/quarantine's QUARANTINE_SKIP_RUNNER check.
+      #
+      # It is exported, not passed per-command, because `quarantine upgrade`
+      # finishes with `exec "$0" start` — the value has to survive that exec.
+      QUARANTINE_SKIP_RUNNER: "true"
+
+    steps:
+      # No actions/checkout. The code being deployed is the host's own
+      # checkout, and a second copy in the runner workspace would be a
+      # different tree that `quarantine upgrade` then would not update.
+
+      # Same three tools, same pins, same checksums as
+      # QuarantineAl/.github's deploy-app.yml and this repo's install.sh —
+      # THREE COPIES NOW, keep them in lockstep. They are installed here
+      # rather than assumed because the runner is a bare myoung34/github-
+      # runner image: it bind-mounts /opt/quarantine but not /usr/local/bin,
+      # so the host's own sops/yq/age are not on this PATH, and
+      # bin/quarantine's require_cmd fails without them.
+      - name: Install quarantine CLI dependencies
+        run: |
+          set -euo pipefail
+          case "$(uname -m)" in
+            x86_64) arch=amd64 ;;
+            aarch64|arm64) arch=arm64 ;;
+            *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+          esac
+
+          sops_version="3.13.3"
+          yq_version="4.53.3"
+          age_version="1.3.1"
+          declare -A sops_sha256=( [amd64]="e5bec3346a873ae91d871550f3e698c1aad962aff462a080e40f25fde17fef6b" [arm64]="53b0abacd38ef1b12a66d6c100956691b9cefce018d91f81e73ddf7438b94d77" )
+          declare -A yq_sha256=( [amd64]="fa52a4e758c63d38299163fbdd1edfb4c4963247918bf9c1c5d31d84789eded4" [arm64]="578648e463a11c1b6db6010cbf41eafed6bee79466fcffa1bb446672cf7945ea" )
+          declare -A age_sha256=( [amd64]="bdc69c09cbdd6cf8b1f333d372a1f58247b3a33146406333e30c0f26e8f51377" [arm64]="c6878a324421b69e3e20b00ba17c04bc5c6dab0030cfe55bf8f68fa8d9e9093a" )
+
+          fetch_verified() {
+            local url="$1" expected="$2" dest="$3" tmp actual
+            tmp="$(mktemp)"
+            curl -fsSL -o "$tmp" "$url"
+            actual="$(sha256sum "$tmp" | awk '{print $1}')"
+            [[ "$actual" == "$expected" ]] || { echo "checksum mismatch for ${url}: expected ${expected}, got ${actual}" >&2; exit 1; }
+            chmod +x "$tmp"
+            sudo mv "$tmp" "$dest"
+          }
+
+          fetch_verified "https://github.com/getsops/sops/releases/download/v${sops_version}/sops-v${sops_version}.linux.${arch}" "${sops_sha256[$arch]}" /usr/local/bin/sops
+          fetch_verified "https://github.com/mikefarah/yq/releases/download/v${yq_version}/yq_linux_${arch}" "${yq_sha256[$arch]}" /usr/local/bin/yq
+
+          age_tmp="$(mktemp -d)"
+          age_tarball="${age_tmp}/age.tar.gz"
+          curl -fsSL -o "$age_tarball" "https://github.com/FiloSottile/age/releases/download/v${age_version}/age-v${age_version}-linux-${arch}.tar.gz"
+          actual="$(sha256sum "$age_tarball" | awk '{print $1}')"
+          [[ "$actual" == "${age_sha256[$arch]}" ]] || { echo "checksum mismatch for age tarball: expected ${age_sha256[$arch]}, got ${actual}" >&2; exit 1; }
+          tar xzf "$age_tarball" -C "$age_tmp"
+          sudo mv "${age_tmp}/age/age" "${age_tmp}/age/age-keygen" /usr/local/bin/
+          rm -rf "$age_tmp"
+
+      # `quarantine upgrade` would fail on a dirty tree anyway, deep inside a
+      # `merge --ff-only`, with git's own wording about local changes being
+      # overwritten. Failing here instead turns that into one sentence naming
+      # the files and saying what not to do.
+      #
+      # Failing rather than warning is the point. The host writes secrets
+      # nobody commits — `quarantine start` generates a missing one and only
+      # logs a reminder, and five further paths write that file with no
+      # reminder at all — so a generated key can exist on one host and nowhere
+      # else, as prod's credentials_key did for days (#47). A warning gets
+      # scrolled past; a blocked deploy does not, and blocking is honest
+      # because the pull below genuinely cannot proceed once main touches the
+      # same file (#43).
+      #
+      # The fix is never "discard". Copy the file off the host, open a PR for
+      # it, and only then restore the host's copy from origin/main — in that
+      # order, because a bare `git checkout --` restores from HEAD and would
+      # take the key off disk before main has it.
+      - name: Refuse to deploy onto a dirty checkout
+        working-directory: ${{ env.QUARANTINE_REPO_PATH }}
+        run: |
+          set -euo pipefail
+          dirty="$(git status --porcelain -- environments/ || true)"
+          if [[ -n "$dirty" ]]; then
+            echo "::error::Host checkout has uncommitted changes under environments/ — refusing to deploy."
+            echo "$dirty"
+            echo
+            echo "These are almost certainly secrets this host generated and nobody committed,"
+            echo "and they may exist nowhere else. Do NOT discard them: scp them off, open a PR,"
+            echo "merge it, and only then restore this host's copy from origin/main."
+            exit 1
+          fi
+          echo "checkout is clean"
+
+      - name: Record the commit being deployed from
+        working-directory: ${{ env.QUARANTINE_REPO_PATH }}
+        run: echo "BEFORE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      # `git fetch origin main` + `merge --ff-only origin/main`, then
+      # `exec "$0" start`. Preferred over open-coding those here because it
+      # also checks the checkout is on main and that the repo the config
+      # points at is the same one this CLI is running from — otherwise it
+      # would pull code into one tree and re-exec from another.
+      - name: Pull and reconcile
+        working-directory: ${{ env.QUARANTINE_REPO_PATH }}
+        run: ./bin/quarantine upgrade
+
+      # QUARANTINE_SKIP_RUNNER above means a change to the runner's own
+      # compose fragment is pulled but never applied, and would otherwise sit
+      # there looking deployed until someone wondered why it had no effect.
+      # There is no way around it: applying it is what kills the job. Say so
+      # loudly instead, and only when the merge actually touched those files.
+      - name: Warn if this change needs manual application
+        if: always()
+        working-directory: ${{ env.QUARANTINE_REPO_PATH }}
+        run: |
+          set -euo pipefail
+          # Compared against a SHA captured before the merge rather than
+          # HEAD@{1}: the reflog's previous entry is only the pre-merge commit
+          # when the merge actually moved HEAD, so an already-up-to-date run
+          # would diff against whatever unrelated operation came last and warn
+          # about nothing.
+          if [[ -z "${BEFORE_SHA:-}" ]]; then
+            echo "no pre-deploy SHA recorded — skipping"; exit 0
+          fi
+          touched="$(git diff --name-only "$BEFORE_SHA" HEAD -- infra/ci/github-runner/ 2>/dev/null || true)"
+          if [[ -n "$touched" ]]; then
+            echo "::warning::This deploy changed the CI runner's own compose fragment, which QUARANTINE_SKIP_RUNNER deliberately did not apply. Run 'quarantine start' on this host over SSH to pick it up."
+            echo "$touched"
+          fi
