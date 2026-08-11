@@ -136,6 +136,47 @@ services:
       - traefik.http.routers.${SUBDOMAIN:-lazaretto}-api-preflight.priority=200
       - traefik.http.routers.${SUBDOMAIN:-lazaretto}-api-preflight.service=${SUBDOMAIN:-lazaretto}-backend
 
+      # Auth failures on a browser fetch must stay CORS-readable.
+      #
+      # The preflight router above fixed OPTIONS. The *authenticated* GET is
+      # fine too — the backend answers with its own CORS headers. What was
+      # left broken is the third case: an unauthenticated GET. oauth2-errors
+      # rewrites forwardAuth's 401 into a 302 fetched from /oauth2/sign_in,
+      # and that redirect carries NO Access-Control-Allow-Origin. A browser
+      # refuses to follow a cross-origin redirect it cannot read, so the
+      # fetch rejects with an opaque CORS error rather than a 401 — the app
+      # cannot tell "you are logged out" from "the network died".
+      #
+      # Confirmed live against lazaretto-api.dev.quarantine.al: OPTIONS
+      # returns 204 with correct CORS headers, an unauthenticated GET returns
+      # 302 with none at all. That is how lazaretto's frontend silently fell
+      # back to its hardcoded capability table and stopped showing the MCP
+      # picker for Ollama, with nothing logged anywhere.
+      #
+      # This router matches only what a browser fetch/XHR sends
+      # (Sec-Fetch-Mode: cors — a top-level navigation sends `navigate`, and
+      # curl sends nothing), so a human opening an -api URL still gets the
+      # normal sign-in bounce. It drops oauth2-errors and keeps oauth2-auth,
+      # so forwardAuth's 401 is returned as a 401, and wraps the chain in a
+      # headers middleware that puts the CORS pair back on it.
+      #
+      # customresponseheaders SETS rather than appends, so on a successful
+      # response it overwrites the backend's identical values instead of
+      # producing the duplicate Access-Control-Allow-Origin a browser would
+      # itself reject. Vary is deliberately left alone — the backend's own
+      # value there is richer than anything worth restating here.
+      #
+      # Below the preflight router's 200 so OPTIONS still wins (a preflight
+      # also carries Sec-Fetch-Mode: cors), above the plain -api router.
+      - traefik.http.middlewares.${SUBDOMAIN:-lazaretto}-api-cors.headers.customresponseheaders.Access-Control-Allow-Origin=https://${SUBDOMAIN:-lazaretto}.${DOMAIN}
+      - traefik.http.middlewares.${SUBDOMAIN:-lazaretto}-api-cors.headers.customresponseheaders.Access-Control-Allow-Credentials=true
+      - traefik.http.routers.${SUBDOMAIN:-lazaretto}-api-fetch.rule=Host(`${SUBDOMAIN:-lazaretto}-api.${DOMAIN}`) && Header(`Sec-Fetch-Mode`, `cors`)
+      - traefik.http.routers.${SUBDOMAIN:-lazaretto}-api-fetch.entrypoints=websecure
+      - traefik.http.routers.${SUBDOMAIN:-lazaretto}-api-fetch.tls=true
+      - traefik.http.routers.${SUBDOMAIN:-lazaretto}-api-fetch.priority=150
+      - traefik.http.routers.${SUBDOMAIN:-lazaretto}-api-fetch.middlewares=${SUBDOMAIN:-lazaretto}-api-cors,oauth2-auth-${SUBDOMAIN:-lazaretto}
+      - traefik.http.routers.${SUBDOMAIN:-lazaretto}-api-fetch.service=${SUBDOMAIN:-lazaretto}-backend
+
   lazaretto-frontend:
     image: ghcr.io/quarantineal/lazaretto-frontend:${LAZARETTO_VERSION:-CHANGEME}
     container_name: quarantine-${SUBDOMAIN:-lazaretto}-frontend
