@@ -48,3 +48,4 @@ include:
 
   # --- apps/third-party: profile-gated, one profile per catalog.yaml entry
   - path: ../../apps/third-party/uptime-kuma/compose.yaml
+  - path: ../../apps/third-party/searxng/compose.yaml
