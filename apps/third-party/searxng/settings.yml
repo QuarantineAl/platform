@@ -38,3 +38,40 @@ search:
   formats:
     - html
     - json
+
+# Engines that answer from a datacenter IP.
+#
+# SearXNG's enabled-by-default general engines are all scrapers, and they all
+# block this host. Measured on prod, not guessed:
+#
+#   brave       Suspended: too many requests
+#   duckduckgo  CAPTCHA
+#   google cse  Suspended: too many requests
+#   startpage   Suspended: CAPTCHA
+#
+# With every one of them refusing, a search returns zero results and the tool
+# loop dutifully reports "No results found" — which is what a user saw. This
+# had been degrading quietly: an hour earlier duckduckgo alone was still
+# answering, which looked fine and left no redundancy at all.
+#
+# The three below were picked by running each candidate against this host's
+# own IP in a throwaway instance and keeping the ones that actually returned
+# results (mwmbl 51, bing 10, seznam 6). yep answered "access denied" and
+# mojeek returned nothing, so neither is here.
+#
+# The default scrapers are deliberately left enabled: their suspensions
+# expire, and they contribute again whenever they are willing to. This adds
+# a floor rather than replacing them.
+#
+# Worth knowing: bing is scraped too, so it can eventually block the same
+# way. The durable fix is a keyed API engine — google cse with a real
+# api_key/engine_id, or a Brave Search API key — which is a per-deployment
+# credential decision rather than something to hardcode here. mwmbl has its
+# own API and is the least likely of the three to start refusing.
+engines:
+  - name: bing
+    disabled: false
+  - name: mwmbl
+    disabled: false
+  - name: seznam
+    disabled: false
