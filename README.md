@@ -168,6 +168,58 @@ runs `quarantine app add`/`start` on the host, plus this org's own
 self-hosted CI runner for app deploys triggered from GitHub — see
 `docs/runners-and-sandboxing.md` for that model.
 
+## Deploying and rolling back
+
+Two different things reach a host, by two different routes.
+
+**An app** (Lazaretto today) deploys from its own repo. A merge to its
+default branch runs `QuarantineAl/.github`'s reusable workflow on this
+environment's runner: it builds and pushes images tagged both
+`:<environment>` and `:<commit-sha>`, then brings the app up resolving the
+**SHA**, not the moving tag — so a deploy delivers the commit it was handed
+or fails, rather than silently picking up whatever was published in
+between. Per-tenant instances are rolled afterwards, one at a time, each
+proven healthy before the next.
+
+A merge to `main` also publishes a **release** on the app's repo, tagged
+CalVer (`v2026.08.12-1`). Its body carries the image references and the
+rollback commands for that exact build. That release is the record of what
+prod is serving — the host's `manifest.yaml` deliberately records the
+moving `:<environment>` tag instead, so that a routine deploy does not
+leave the checkout permanently dirty and break the next `git pull`.
+
+**The platform itself** deploys from this repo via
+`.github/workflows/deploy-platform.yml`. It builds nothing: the tree being
+deployed already lives at `/opt/quarantine/repo` on the runner's own host,
+so the pull *is* the deploy and `quarantine upgrade` is what applies it. A
+push to `main` reconciles **dev only**; prod is a deliberate
+`workflow_dispatch`, because `quarantine start` reconciles traefik,
+postgres, zitadel and observability — a bad merge would take the identity
+provider and the database with it for every tenant at once.
+
+> **Currently manual.** That workflow queues forever until
+> `QuarantineAl/platform` is added to the `first-party` org runner group.
+> Deploy platform changes by hand meanwhile: `git pull --ff-only` in
+> `/opt/quarantine/repo`, then recreate whatever the change touched.
+
+### Rolling an app back
+
+On the target host, in `/opt/quarantine/repo`, with the SHA from the
+release you want:
+
+```bash
+./bin/quarantine app add lazaretto --version <sha>
+./bin/quarantine start
+./bin/quarantine tenant upgrade-all <sha>
+```
+
+The first two pin and apply the shared instance; the third rolls the
+per-tenant instances, which sit outside `start`'s reconciliation loop and
+are otherwise left behind. Drop it for an app with no tenants.
+
+`app add` edits the tracked `manifest.yaml`, so commit that change or the
+next deploy's `git pull` will conflict with it.
+
 ## Learn more
 
 - [`docs/architecture.md`](docs/architecture.md) — repository layout, the
