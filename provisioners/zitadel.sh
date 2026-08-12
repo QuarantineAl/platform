@@ -937,6 +937,27 @@ fi
 # these three shows it expects client_secret_post instead, change this one
 # field to OIDC_AUTH_METHOD_TYPE_POST for that app — nothing else here is
 # app-specific enough to need touching.
+#
+# idTokenUserinfoAssertion is NOT Zitadel's default and has to be asked for.
+# Without it the id_token carries sub/iss/aud and nothing else — no email, no
+# name — and under the oauth2-proxy model that token is the ONLY thing a
+# first-party backend ever sees. Lazaretto's AuthService reads email and name
+# straight off those claims, so it stores empty strings and every user shows
+# up nameless: a blank display name, a blank email, and an avatar falling
+# back to "?" because there are no initials to derive.
+#
+# Found live: prod had it false and dev had it true, so the same build looked
+# correct on one environment and broken on the other, with nothing in either
+# log to say why. Dev was evidently flipped by hand at some point; prod was
+# bootstrapped later and got the default. Setting it here is what stops the
+# two drifting again.
+#
+# Existing applications are NOT retrofitted by this — CreateApplication only
+# runs for an app that does not exist yet. Flip it in the console for any app
+# already created (Project -> Application -> Token Settings -> "User Info
+# inside ID Token"). The next request then backfills the user row on its own,
+# because findOrCreateUser re-assigns email and displayName on every call
+# rather than only at creation.
 create_app_body="$(cat <<JSON
 {
   "projectId": "${project_id}",
@@ -948,7 +969,8 @@ create_app_body="$(cat <<JSON
     "grantTypes": ["OIDC_GRANT_TYPE_AUTHORIZATION_CODE", "OIDC_GRANT_TYPE_REFRESH_TOKEN"],
     "applicationType": "OIDC_APP_TYPE_WEB",
     "authMethodType": "OIDC_AUTH_METHOD_TYPE_BASIC",
-    "version": "OIDC_VERSION_1_0"
+    "version": "OIDC_VERSION_1_0",
+    "idTokenUserinfoAssertion": true
   }
 }
 JSON
