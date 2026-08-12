@@ -39,7 +39,26 @@
 # SSO-like bleed across the persistent deployment and every open PR
 # sandbox, not a real vulnerability (the underlying identity check is
 # still a real Zitadel session either way) but a broader scope than a
-# plain per-host cookie would give.
+# plain per-host cookie would give. Signing in to dev therefore carries
+# into every PR sandbox, which is the point: a reviewer opens a sandbox
+# link and is already in.
+#
+# That sharing is safe for the SESSION cookie and fatal for the CSRF one,
+# which is why COOKIE_CSRF_PER_REQUEST below is not optional. oauth2-proxy
+# writes a second, short-lived cookie during login — <COOKIE_NAME>_csrf —
+# on the same broadened domain, and a browser keeps exactly one cookie per
+# (name, domain) pair. With the name shared, two instances overwrite each
+# other's nonce and whichever callback arrives second fails its own check:
+#
+#   AuthFailure Invalid authentication via OAuth2: unable to obtain CSRF
+#   cookie: CSRF cookie with name '_oauth2_proxy_lazaretto_csrf' was not
+#   found
+#
+# which Traefik's oauth2-errors middleware then renders as a bare 403 on
+# an otherwise successful login. Observed on a PR sandbox while signed in
+# to the persistent dev deployment, with two same-named session cookies
+# visible in one Cookie header. It applies to per-tenant instances for the
+# same reason, not just sandboxes.
 #
 # Full self-service recipe — single-origin, multi-origin, and PR-sandboxed
 # consumers, the forwarded-identity contract every first-party app's
@@ -165,6 +184,24 @@ services:
       # COOKIE_DOMAINS broader than its own single host MUST set a unique
       # COOKIE_NAME for exactly this reason.
       OAUTH2_PROXY_COOKIE_NAME: _oauth2_proxy_lazaretto
+      # Load-bearing, given the shared COOKIE_NAME above. Derives the CSRF
+      # cookie's name from the flow's own state parameter instead of from
+      # COOKIE_NAME, so concurrent logins across instances stop clobbering
+      # each other. Without it, opening a PR sandbox while signed in to the
+      # persistent deployment 403s at the callback — see the file header.
+      #
+      # Renaming the session cookie per instance would also have fixed the
+      # clash, but at the cost of the SSO bleed described above: a reviewer
+      # would have to sign in again for every sandbox. This keeps one
+      # session and fixes only the part that genuinely cannot be shared.
+      OAUTH2_PROXY_COOKIE_CSRF_PER_REQUEST: "true"
+      # Each in-flight login adds a cookie, and they are only cleared on
+      # completion — an abandoned flow leaves one behind. oauth2-proxy's own
+      # docs flag unbounded growth as a route to 431 Request Header Fields
+      # Too Large; capping it evicts the oldest instead. 5 is well above the
+      # concurrent logins one person generates and well below a header
+      # limit.
+      OAUTH2_PROXY_COOKIE_CSRF_PER_REQUEST_LIMIT: "5"
       # Plural env var, list-typed (confirmed against oauth2-proxy's own
       # docs) — the shared parent of ${SUBDOMAIN}.${DOMAIN} and
       # ${SUBDOMAIN}-api.${DOMAIN}, so the session cookie set while
