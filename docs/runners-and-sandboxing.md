@@ -60,11 +60,19 @@ age key, Docker daemon, or Traefik instance (decision 6: one age key per
 environment, enforced by `.sops.yaml` path). Untrusted code (any fork PR
 on a public repo) stays on GitHub-hosted runners in both environments,
 full stop, regardless of how convenient a self-hosted runner might seem
-for a one-off case. Every deploy workflow scopes its `docker compose up`
-to the app's own service(s) — never a bare `quarantine start`/`--profile
+for a one-off case. An **app** deploy scopes its `docker compose up`
+to the app's own service(s), never a bare `quarantine start`/`--profile
 gitops`-style invocation that could recreate the runner's own container
-mid-job (confirmed empirically to kill the job doing the recreating; see
-`QUARANTINE_SKIP_RUNNER` in `bin/quarantine`).
+mid-job (confirmed empirically to kill the job doing the recreating).
+
+The one exception is deploying **the platform itself**
+(`.github/workflows/deploy-platform.yml`), which has no per-app profile to
+scope to and genuinely needs the full reconcile — so it exports
+`QUARANTINE_SKIP_RUNNER=true` instead, the only consumer of that flag
+anywhere. The corollary is that a change to the runner's own compose
+fragment can never be applied by CI, because applying it is exactly what
+kills the job; that workflow detects such a change and warns rather than
+pretending it shipped. See `QUARANTINE_SKIP_RUNNER` in `bin/quarantine`.
 
 ## Per-PR sandboxes
 
