@@ -362,21 +362,40 @@ tenant_up() {
 # already dying. It exits rather than warns on an unreadable allowlist, and a
 # crash-looping sidecar takes the tenant's Traefik middleware down with it,
 # leaving the whole hostname answering 404 with nothing to connect it back to
-# the real cause. Checking the restart count here turns that into one clear
-# error at the point of provisioning.
+# the real cause. Watching for restarts here turns that into one clear error
+# at the point of provisioning.
+#
+# What it watches for is restarts happening NOW, not `.RestartCount` being
+# non-zero. That counter is cumulative for the container's whole lifetime and
+# is only reset by recreating it — so a proxy that restarted once during a
+# host reboot last week reads exactly like one crash-looping this second.
+# `up -d` leaves an unchanged sidecar in place rather than recreating it, so
+# the count survives deploys and the gate never clears again.
+#
+# Confirmed the expensive way: all three prod tenants sat at restarts=6 from a
+# restart the previous day, healthy and serving, and the next deploy failed at
+# tenant 1 of 3 with "crash-looping" — aborting the rollout for the other two
+# and leaving prod split across builds. Comparing a lifetime counter against
+# zero makes every deploy after the first restart fail, permanently.
 assert_proxy_healthy() {
-  local t="$1" c status restarts waited=0
+  local t="$1" c status restarts baseline waited=0
   c="quarantine-oauth2-proxy-$(tenant_subdomain "$t")"
+  # The count as we found it. Anything above this happened while we watched,
+  # which is the only thing that says "looping right now".
+  baseline="$(docker inspect --format '{{.RestartCount}}' "$c" 2>/dev/null || echo 0)"
   while (( waited < 15 )); do
     status="$(docker inspect --format '{{.State.Status}}' "$c" 2>/dev/null || echo missing)"
     restarts="$(docker inspect --format '{{.RestartCount}}' "$c" 2>/dev/null || echo 0)"
-    if [[ "$status" == "running" ]] && (( restarts == 0 )); then
-      return 0
-    fi
-    if [[ "$status" == "restarting" ]] || (( restarts > 0 )); then
-      warn "tenant '${t}''s oauth2-proxy is crash-looping (status=${status}, restarts=${restarts}). Its last words:"
+    if [[ "$status" == "restarting" ]] || (( restarts > baseline )); then
+      warn "tenant '${t}''s oauth2-proxy is crash-looping (status=${status}, restarts=${restarts}, was ${baseline} before this check). Its last words:"
       docker logs --tail 5 "$c" 2>&1 | sed 's/^/    /' >&2
       die "tenant '${t}' came up but its access-control sidecar did not. Until it runs, Traefik has no oauth2-auth-$(tenant_subdomain "$t") middleware and the tenant's hostname answers 404. The usual cause is an allowlist the container's non-root uid cannot read: check $(tenant_allowlist "$t") is 0644 inside a traversable directory."
+    fi
+    # Running and not having restarted since we started looking. Still worth
+    # a second sample: a container that is about to die is 'running' right up
+    # until it does, which is the whole reason this function exists.
+    if [[ "$status" == "running" ]] && (( waited >= 3 )); then
+      return 0
     fi
     sleep 3; waited=$(( waited + 3 ))
   done
