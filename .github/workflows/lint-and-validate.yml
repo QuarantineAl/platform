@@ -1,5 +1,5 @@
 # The second CI workflow, filling in the "Phase 4 scope" gap called out in
-# verify-secrets-encrypted.yml's header comment. Two independent, narrow
+# verify-secrets-encrypted.yml's header comment. Three independent, narrow
 # checks:
 #
 #   1. shellcheck — every shell script in the repo, at warning severity
@@ -10,7 +10,29 @@
 #      known, accepted, not fixable, not worth a special-case suppression
 #      syntax on top of the severity filter that already handles it).
 #
-#   2. compose-validate — `docker compose config` against
+#   2. actionlint — every workflow under .github/workflows. This repo
+#      ships workflows that run as root on the deploy hosts, and until
+#      this job existed none of that YAML was linted at all: a typo in an
+#      expression, an invalid `runs-on`, or a shell bug inside a `run:`
+#      block reached a production host before anything checked it. Real
+#      examples caught by running it locally, which CI would have waved
+#      through: a heredoc whose continuation lines broke the enclosing
+#      YAML block scalar, and a comment inserted mid-backslash-continuation
+#      that silently detached an env prefix from its command.
+#
+#      Globbed, deliberately unlike the shellcheck list above — a workflow
+#      added without a line in a hardcoded list is simply never linted,
+#      which is exactly how lazaretto-tenant.sh went unchecked.
+#
+#      actionlint also runs shellcheck over every `run:` block, at
+#      shellcheck's DEFAULT severity rather than the warning floor used
+#      above, so it is stricter there. The repo is clean at that level
+#      today. To silence an info-level finding, put the
+#      `# shellcheck disable=SCxxxx` directive immediately above the
+#      offending line — a directive at the top of a `run:` block is not
+#      honoured for the whole block (verified).
+#
+#   3. compose-validate — `docker compose config` against
 #      environments/_template/compose.yaml with every profile flag
 #      (observability, uptime-kuma, portainer, lazaretto, searxng), to
 #      structurally validate the assembled compose graph (include: resolution, var
@@ -68,6 +90,47 @@ jobs:
           # excludes the one accepted info-level SC1091 finding described
           # above without needing a per-file/per-line suppression.
           shellcheck --severity=warning -x "${scripts[@]}"
+
+  actionlint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pinned and checksum-verified rather than piping the project's
+      # install script into a shell: this repo verifies every binary it
+      # fetches (see install.sh and the reusable deploy workflow), and a
+      # linter that gates production workflows is a poor place to start
+      # trusting whatever a URL returns today.
+      - name: Install actionlint
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="1.7.12"
+          sha256="8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+          url="https://github.com/rhysd/actionlint/releases/download/v${version}/actionlint_${version}_linux_amd64.tar.gz"
+          tmp="$(mktemp -d)"
+          curl -fsSL -o "${tmp}/actionlint.tar.gz" "$url"
+          actual="$(sha256sum "${tmp}/actionlint.tar.gz" | awk '{print $1}')"
+          [[ "$actual" == "$sha256" ]] || { echo "checksum mismatch for ${url}: expected ${sha256}, got ${actual}" >&2; exit 1; }
+          tar xzf "${tmp}/actionlint.tar.gz" -C "$tmp" actionlint
+          sudo mv "${tmp}/actionlint" /usr/local/bin/actionlint
+          rm -rf "$tmp"
+          actionlint --version
+
+      - name: actionlint every workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The shellcheck binary is pre-installed on ubuntu-latest, and
+          # actionlint picks it up automatically to lint the shell inside
+          # `run:` blocks — most of the value here, since that shell is what
+          # actually touches the hosts.
+          #
+          # (This comment deliberately does not begin with the linter's own
+          # name: a comment whose first word is that name is parsed as a
+          # directive, and an unparseable one is an ERROR-level SC1072/SC1073.
+          # Caught by this very job on its first run.)
+          actionlint -color .github/workflows/*.yml
 
   compose-validate:
     runs-on: ubuntu-latest
