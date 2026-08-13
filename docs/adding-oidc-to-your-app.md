@@ -213,6 +213,28 @@ every future first-party app should be able to just follow it.
     in the forwarded token, check the Zitadel application's own "User
     Roles Inside ID Token" setting in the console before assuming the
     scope is wrong.
+- **The Zitadel application needs `idTokenUserinfoAssertion: true`** — and
+  it is NOT the default, so it has to be asked for. Requesting the `email`
+  and `profile` scopes above is necessary but not sufficient: the scopes
+  govern what the *userinfo endpoint* will return, while this flag governs
+  whether those claims are also written into the *ID token*. Under this
+  platform's model your backend never calls userinfo — the forwarded
+  `Authorization: Bearer <id_token>` is the only thing it ever sees — so
+  with the flag off the token arrives carrying `sub`/`iss`/`aud` and
+  nothing else.
+  `provisioners/zitadel.sh` sets it on every application it creates, so a
+  new app gets it for free; an application that already existed does not,
+  and has to be fixed in the console (Project -> Application -> Token
+  Settings -> "User Info inside ID Token").
+  This one is worth checking early because of how it fails. Nothing errors:
+  forwardAuth passes, the token verifies against JWKS, your app's claims
+  parsing succeeds — it just parses claims that are not there, and every
+  user is silently created with an empty email and an empty display name.
+  Confirmed live: prod had the flag off and dev had it on, so the same
+  build rendered correct names on one environment and blank ones on the
+  other, with nothing in either log to distinguish them. If your app
+  derives anything from the user (initials for an avatar, a greeting, an
+  audit trail), it degrades to whatever your empty-string fallback is.
 - **Your backend MUST verify the forwarded JWT itself** — signature and
   expiry, against Zitadel's JWKS (`<issuer>/oauth/v2/keys`, `jose`'s
   `createRemoteJWKSet` + `jwtVerify` is the reference tool). This is

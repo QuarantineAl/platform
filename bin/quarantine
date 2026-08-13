@@ -495,8 +495,12 @@ cmd_start() {
   # assembled service list is what actually reflects that.
   #
   # QUARANTINE_SKIP_RUNNER opts out of touching the runner service at all.
-  # The reusable CI workflow (QuarantineAl/.github) sets this when it calls
-  # `quarantine start` FROM INSIDE a job running on this very runner pool:
+  # Set by this repo's own .github/workflows/deploy-platform.yml, which is
+  # the one workflow that calls `quarantine start` FROM INSIDE a job running
+  # on this very runner pool. (It previously said the reusable app-deploy
+  # workflow sets it; that stopped being true when deploy-app.yml was
+  # rewritten to use a directly-scoped `docker compose up` instead, which
+  # never touches the runner service and so needs no opt-out.) The hazard:
   # `up -d runner` recreating that container mid-job kills the job that's
   # doing the recreating (confirmed empirically — a live job got
   # "The operation was canceled" when its own container got torn down and
