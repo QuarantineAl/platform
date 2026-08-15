@@ -64,6 +64,15 @@ services:
     pids_limit: ${LAZARETTO_PIDS_LIMIT:-1024}
     environment:
       FRONTEND_ORIGIN: https://${SUBDOMAIN:-lazaretto}.${DOMAIN}
+      # backend/src/mcp-servers/mcp-oauth-config.ts. This backend's own
+      # externally-reachable origin -- NOT FRONTEND_ORIGIN above, which is
+      # the frontend's -- used as the redirect_uri sent to a remote MCP
+      # server's authorization server when connecting one via OAuth. Same
+      # ${SUBDOMAIN}-api.${DOMAIN} host the traefik routers below already
+      # route to, so it's always right for the persistent deployment, every
+      # PR sandbox, and every per-tenant instance without any per-invocation
+      # override.
+      LAZARETTO_PUBLIC_API_ORIGIN: https://${SUBDOMAIN:-lazaretto}-api.${DOMAIN}
       # backend/src/cli-agents/cli-runtime.service.ts; unset there means 4.
       CLI_MAX_CONCURRENT: ${LAZARETTO_CLI_MAX_CONCURRENT:-4}
       # AES-256-GCM master key for stored credentials (SSH keys, GitHub/npm
