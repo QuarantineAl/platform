@@ -1,0 +1,38 @@
+# apps/first-party/qualitech/compose.yaml — ${SUBDOMAIN:-qualitech}.${DOMAIN}
+# (catalog.yaml: qualitech)
+#
+# Single-container static marketing site: a Next.js app exported to static
+# HTML/CSS/JS (no server-only features in use) and served by nginx — same
+# shape as lazaretto's frontend half, minus the paired backend, minus OIDC.
+# No database, no OIDC, no per-tenant concept.
+#
+# SUBDOMAIN defaults to "qualitech" for the persistent catalog deployment
+# (quarantine app add qualitech / quarantine start) but is overridden per
+# invocation for a PR sandbox (pr-<n>-qualitech), same convention as
+# lazaretto's frontend fragment.
+
+services:
+  qualitech:
+    image: ghcr.io/quarantineal/qualitech:${QUALITECH_VERSION:-CHANGEME}
+    container_name: quarantine-${SUBDOMAIN:-qualitech}
+    restart: unless-stopped
+    profiles: [qualitech]
+    networks:
+      - edge
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:80/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    labels:
+      - traefik.enable=true
+      - traefik.http.services.${SUBDOMAIN:-qualitech}.loadbalancer.server.port=80
+      - traefik.http.routers.${SUBDOMAIN:-qualitech}.rule=Host(`${SUBDOMAIN:-qualitech}.${DOMAIN}`)
+      - traefik.http.routers.${SUBDOMAIN:-qualitech}.entrypoints=websecure
+      - traefik.http.routers.${SUBDOMAIN:-qualitech}.tls=true
+      - traefik.http.routers.${SUBDOMAIN:-qualitech}.service=${SUBDOMAIN:-qualitech}
+
+networks:
+  edge:
+    external: true
