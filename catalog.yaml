@@ -117,6 +117,20 @@ apps:
       true — deferred since the current small number of trusted operators
       doesn't need it yet.
 
+  - name: qualitech
+    kind: app
+    compose_path: apps/first-party/qualitech/compose.yaml
+    subdomain: qualitech
+    needs_db: false
+    needs_oidc: false
+    notes: >-
+      Static marketing site (Next.js static export, no server-only
+      features) served by nginx — a single container, unlike lazaretto's
+      backend+frontend pair. Built by its own repo's GitHub Actions
+      workflows rather than QuarantineAl/.github's reusable deploy-app.yml/
+      pr-sandbox-*.yml, which assume a two-image app shape. QuarantineAl/
+      qualitech has no main branch and no prod environment yet — dev only.
+
   - name: searxng
     kind: app
     compose_path: apps/third-party/searxng/compose.yaml

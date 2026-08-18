@@ -35,5 +35,7 @@
 apps:
   - name: lazaretto
     version: dev
+  - name: qualitech
+    version: dev
   - name: searxng
 observability: false
