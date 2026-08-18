@@ -75,6 +75,15 @@ services:
       LAZARETTO_PUBLIC_API_ORIGIN: https://${SUBDOMAIN:-lazaretto}-api.${DOMAIN}
       # backend/src/cli-agents/cli-runtime.service.ts; unset there means 4.
       CLI_MAX_CONCURRENT: ${LAZARETTO_CLI_MAX_CONCURRENT:-4}
+      # backend/src/cli-agents/cli-runtime.service.ts; unset there means a
+      # 5-minute wall-clock timeout per turn, with no allowance for time
+      # spent inside the CLI's own retry/backoff on an Anthropic API 429 --
+      # that wait counts fully against the same budget as active work, so a
+      # turn that hits rate limiting can be killed for "running too long"
+      # while it was actually just waiting. Raised to 3 hours across every
+      # tenant so a turn only dies for genuinely running away, not for
+      # absorbing a retry.
+      CLI_TURN_TIMEOUT_MS: ${LAZARETTO_TURN_TIMEOUT_MS:-10800000}
       # AES-256-GCM master key for stored credentials (SSH keys, GitHub/npm
       # tokens). Declared in catalog.yaml's generated_secrets and generated
       # once — per app for a manifest deployment, per TENANT for a per-tenant
