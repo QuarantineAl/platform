@@ -386,6 +386,63 @@ services:
       - traefik.http.middlewares.oauth2-errors-${SUBDOMAIN:-lazaretto}.errors.query=/oauth2/sign_in?rd={url}
       - traefik.http.middlewares.oauth2-errors-${SUBDOMAIN:-lazaretto}.errors.statusRewrites.401=302
 
+  # n8n: third consumer, single-origin, never-sandboxed — same simple shape
+  # as Uptime Kuma above, just with every `-<app>` suffix actually applied
+  # (per this file's own "Adding a THIRD consumer" note), since Uptime
+  # Kuma's own unsuffixed middleware names are a historical exception kept
+  # for backward compatibility, not the pattern new consumers should copy.
+  #
+  # n8n's webhook/OAuth2-callback path exceptions are NOT handled here —
+  # they live entirely in apps/third-party/n8n/compose.yaml's own router
+  # priority split (n8n-public vs n8n-admin). This oauth2-proxy instance
+  # only ever gates the admin router; it has no path-exception concept of
+  # its own to configure.
+  oauth2-proxy-n8n:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.3
+    container_name: quarantine-oauth2-proxy-n8n
+    restart: unless-stopped
+    profiles: [n8n]
+    environment:
+      OAUTH2_PROXY_PROVIDER: oidc
+      OAUTH2_PROXY_OIDC_ISSUER_URL: https://auth.${DOMAIN}
+      OAUTH2_PROXY_CLIENT_ID: ${OIDC_CLIENT_ID_N8N}
+      OAUTH2_PROXY_CLIENT_SECRET: ${OIDC_CLIENT_SECRET_N8N}
+      OAUTH2_PROXY_COOKIE_SECRET: ${OAUTH2_PROXY_COOKIE_SECRET}
+      OAUTH2_PROXY_EMAIL_DOMAINS: "*"
+      OAUTH2_PROXY_REVERSE_PROXY: "true"
+      OAUTH2_PROXY_HTTP_ADDRESS: 0.0.0.0:4180
+      OAUTH2_PROXY_UPSTREAMS: static://202
+      OAUTH2_PROXY_REDIRECT_URL: https://n8n.${DOMAIN}/oauth2/callback
+      OAUTH2_PROXY_SET_XAUTHREQUEST: "true"
+      OAUTH2_PROXY_SKIP_PROVIDER_BUTTON: "true"
+      # Deliberately no offline_access / COOKIE_REFRESH / SET_AUTHORIZATION_
+      # HEADER here, same reasoning as oauth2-proxy-uptime-kuma above: this
+      # proxy is pure access control in front of n8n, which never reads a
+      # forwarded id_token or checks its expiry.
+      OAUTH2_PROXY_SCOPE: "openid email profile"
+    networks:
+      - edge
+    # No healthcheck — same reasoning as oauth2-proxy-uptime-kuma above
+    # (static distroless binary, no shell/curl/wget to probe with).
+    labels:
+      - traefik.enable=true
+      - traefik.http.services.oauth2-proxy-n8n.loadbalancer.server.port=4180
+
+      - traefik.http.routers.oauth2-proxy-n8n.rule=Host(`n8n.${DOMAIN}`) && PathPrefix(`/oauth2/`)
+      - traefik.http.routers.oauth2-proxy-n8n.entrypoints=websecure
+      - traefik.http.routers.oauth2-proxy-n8n.tls=true
+      - traefik.http.routers.oauth2-proxy-n8n.priority=100
+      - traefik.http.routers.oauth2-proxy-n8n.service=oauth2-proxy-n8n
+
+      - traefik.http.middlewares.oauth2-auth-n8n.forwardauth.address=http://quarantine-oauth2-proxy-n8n:4180/oauth2/auth
+      - traefik.http.middlewares.oauth2-auth-n8n.forwardauth.trustForwardHeader=true
+      - traefik.http.middlewares.oauth2-auth-n8n.forwardauth.authResponseHeaders=X-Auth-Request-User,X-Auth-Request-Email,X-Auth-Request-Groups,Authorization
+
+      - traefik.http.middlewares.oauth2-errors-n8n.errors.status=401-403
+      - traefik.http.middlewares.oauth2-errors-n8n.errors.service=oauth2-proxy-n8n
+      - traefik.http.middlewares.oauth2-errors-n8n.errors.query=/oauth2/sign_in?rd={url}
+      - traefik.http.middlewares.oauth2-errors-n8n.errors.statusRewrites.401=302
+
 networks:
   edge:
     external: true
