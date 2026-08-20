@@ -41,26 +41,59 @@ services:
       - edge
     volumes:
       - lazaretto-data:/app/data
-    # Per-instance resource ceilings, from measurements on the live dev host
-    # (x86_64, 4 vCPU / 7.9 GB) reading cgroup `anon` — not `docker stats` or
-    # memory.current, both of which mislead here by counting ~430 MiB of
-    # reclaimable page cache. An idle backend costs 53 MiB; a concurrent agent
-    # turn costs ~173 MiB light and ~237-255 MiB heavy, near-linear and
-    # slightly sub-linear under concurrency. Four concurrent heavy turns
-    # peaked at 999 MiB.
+    # Per-instance resource ceilings. These are re-derived from PRODUCTION OOM
+    # DATA and replace an earlier set measured on an idle dev host (53 MiB
+    # idle, ~173/250 MiB per turn, "four concurrent heavy turns peaked at
+    # 999 MiB"). That model was ~2.2x too low and it killed real turns:
+    # quarantine-qualitech-lazaretto-backend recorded oom_kill 5 and hit its
+    # 1200 MiB ceiling 13,285 times.
     #
-    # The default matters most for CLI_MAX_CONCURRENT: the backend defaults it
-    # to 4 PER PROCESS, so twenty per-tenant instances would permit eighty
-    # concurrent turns — roughly 20 GiB of unbounded demand against a host
-    # with no swap. provisioners/lazaretto-tenant.sh scales all three to the
-    # tenant (1-2 for a solo tenant, 4 for a team) via
-    # mem = 250 MiB x concurrency + 200 MiB headroom; the defaults here keep
-    # the shared deployment and PR sandboxes at today's concurrency of 4, with
-    # a ceiling comfortably above that measured 999 MiB peak.
-    mem_limit: ${LAZARETTO_MEM_LIMIT:-1200m}
+    # What the old measurement missed is that it measured turns and nothing
+    # else. Reconstructing the kernel's per-task OOM dumps (Sum of per-task
+    # rss_anon matches the cgroup's anon to 0.00 MiB) shows the largest single
+    # consumer in every kill was what the agent's Bash tool RAN — an npm
+    # test/build/lint chain at 315-694 MiB, more than either concurrent turn
+    # beside it. In one event only TWO of the four permitted turns were even
+    # running.
+    #
+    #   mem_limit(C) = 100 + 450*C + 700*max(1, ceil(C/4)) + 100   MiB
+    #                  base   turns  one heavy tool run       page cache
+    #
+    # 2700m at the concurrency-4 default below. Full derivation lives in
+    # lazaretto's docs/PER_TENANT_CONTAINER_PLAN.md section 7a;
+    # docs/vm-sizing-and-provisioning.md sizes the HOST these add up on.
+    #
+    # provisioners/lazaretto-tenant.sh computes all of these from the tenant's
+    # --concurrency (1-2 for a solo tenant, 4 for a team) and overrides every
+    # default here; the defaults serve the shared catalog deployment and PR
+    # sandboxes, which run at concurrency 4.
+    mem_limit: ${LAZARETTO_MEM_LIMIT:-2700m}
+    # mem_limit plus an equal amount of swap, stated rather than left to
+    # Docker's identical 2x default — because setting this EQUAL to mem_limit
+    # is runc's signal to disable swap outright (it writes
+    # memory.swap.max=0). `docker update --memory Xg --memory-swap Xg`, the
+    # obvious way to widen a ceiling during an incident, therefore removes the
+    # container's shock absorber at the same moment; that is what happened to
+    # qualitech, leaving it the only one of four backends with swap disabled.
+    #
+    # Swap is what makes memory pressure survivable rather than lethal here: a
+    # turn burns 0.5% CPU, spending ~99.5% of its wall time blocked on API
+    # round-trips, so concurrent heaps are cold and evict cheaply. THE VM MUST
+    # ACTUALLY HAVE SWAP — see docs/vm-sizing-and-provisioning.md.
+    memswap_limit: ${LAZARETTO_MEMSWAP_LIMIT:-5400m}
+    # Part of the memory budget above, not fairness dressing. Node reads the
+    # cgroup CPU quota in os.availableParallelism(), and every JS toolchain an
+    # agent might invoke sizes its worker pool from it: jest runs
+    # availableParallelism-1 workers, so an uncapped container on a 4-vCPU
+    # host runs three at ~180 MiB each. Verified on the dev host: uncapped
+    # reports 4, --cpus 2 reports 2, --cpus 1.5 reports 1. At 2, that jest run
+    # uses one worker and the heavy-tool term falls from ~640 MiB to ~250 — a
+    # larger saving than any plausible increase to mem_limit, and what keeps
+    # the "one heavy tool run at a time" assumption honest.
+    cpus: ${LAZARETTO_CPUS:-2}
     # Fork-bomb guard: one runaway session should not be able to take the host
-    # down with it. Generous next to real usage (a turn spawns a CLI and its
-    # children, not hundreds of processes).
+    # down with it. Generous next to real usage — a prod container running two
+    # turns, two interactive terminals and a full npm test peaked at 129 pids.
     pids_limit: ${LAZARETTO_PIDS_LIMIT:-1024}
     environment:
       FRONTEND_ORIGIN: https://${SUBDOMAIN:-lazaretto}.${DOMAIN}
