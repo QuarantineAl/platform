@@ -1,0 +1,168 @@
+# apps/third-party/n8n/compose.yaml — n8n.${DOMAIN} (catalog.yaml: n8n)
+#
+# n8n Community Edition has no native OIDC/SSO (catalog.yaml: needs_oidc:
+# true, but the OIDC client this entry provisions is consumed by the
+# oauth2-proxy-n8n sidecar in infra/edge/oauth2-proxy/compose.yaml, not n8n
+# itself — same shape as Uptime Kuma). Two routers on the same host split
+# unauthenticated machine-callback traffic from the authenticated editor UI:
+#   - n8n-public (priority 50): /webhook*, /webhook-test*, /webhook-waiting*
+#     (external and internal workflow triggers, plus Wait-node resume URLs —
+#     these must be reachable with no interactive auth session) and
+#     /rest/oauth2-credential/callback (n8n's own OAuth2 redirect target for
+#     credentials such as Google APIs — breaks behind an auth wall). No auth
+#     middleware.
+#   - n8n-admin (priority 10, catch-all): the editor UI, /rest/* (except the
+#     callback above), /socket.io — gated by oauth2-errors-n8n/oauth2-auth-n8n
+#     (defined on the oauth2-proxy-n8n service, infra/edge/oauth2-proxy/
+#     compose.yaml — Traefik aggregates middleware/router definitions
+#     project-wide regardless of which file declares them). Traefik picks the
+#     highest-priority MATCHING router, so the public paths never reach the
+#     admin router.
+# oauth2-proxy-n8n owns /oauth2/* directly (priority 100, above both).
+#
+# Webhook paths stay reachable through n8n-public with no platform-level
+# auth — that is intentional, not a gap: each webhook's own per-webhook auth
+# (none / header / basic auth), configured inside n8n itself, is what
+# actually protects it. Do not add oauth2-auth-n8n to n8n-public.
+#
+# needs_db: true — the first catalog app to use the shared Postgres instance
+# (decision 4) rather than its own SQLite volume. DB_TYPE=postgresdb,
+# database/role "n8n" (provisioners/postgres.sh, driven off this entry's
+# name — hyphens would become underscores, moot here since the name has
+# none). The password reaches this container via catalog.yaml's
+# generated_secrets, keyed under the SAME secrets.sops.yaml path
+# provisioners/postgres.sh itself writes (.apps["n8n"].db_password) — no
+# code changes to bin/quarantine needed. Whichever of postgres.sh or that
+# generated_secrets entry runs first on a given `quarantine start` mints
+# the real password and the other reuses it (both call the same
+# generator); the .env that actually starts this container always
+# reflects the final value, since reconcile_apps re-runs generate_env_file
+# after every provisioner. See catalog.yaml's own comment on this entry
+# for the exact ordering on a fresh app's first start. Exposed
+# as ${DATABASE_PASSWORD_N8N} (not literally DB_POSTGRESDB_PASSWORD) in the
+# shared per-environment .env — see catalog.yaml's own comment on this
+# entry's generated_secrets for why, and the environment: block below for
+# where it's mapped to the container-facing name n8n actually reads.
+# Requires joining the internal `db` network (quarantine-db) in addition to
+# `edge` — see infra/data/postgres/compose.yaml. Zitadel is currently the
+# only other example of this network pairing; no catalog app has needed it
+# until now.
+#
+# N8N_ENCRYPTION_KEY is the AES master key for every credential n8n stores
+# (OAuth tokens, API keys, etc.) in that same Postgres database — generated
+# ONCE via catalog.yaml's generated_secrets (hex32) and never rotated:
+# rotating it makes every existing stored credential permanently
+# undecryptable, the same treatment as LAZARETTO_CREDENTIALS_KEY.
+#
+# CALLBACK_STATIC_SECRET_N8N is shared with Lazaretto's own headless-API
+# contract (docs/headless-api.md in the lazaretto repo — the
+# X-Callback-Secret header n8n workflows must send when calling
+# Lazaretto's task-callback endpoints); only the VALUE has to match
+# Lazaretto's own side, not this variable's name. Generated here via
+# generated_secrets like the other two; if Lazaretto already has a fixed
+# value for this, override it here via `secrets_edit` BEFORE the first
+# `quarantine start` for n8n instead of letting it autogenerate — see
+# apps/third-party/n8n/SETUP.md. Not consumed by n8n itself (no such
+# setting exists); it is exposed here purely so workflows built in the
+# editor can reference it as {{$env.CALLBACK_STATIC_SECRET}} — the
+# container-facing name below, mapped from the host-side
+# ${CALLBACK_STATIC_SECRET_N8N} the same way DB_POSTGRESDB_PASSWORD is
+# mapped from ${DATABASE_PASSWORD_N8N} above — when calling Lazaretto over
+# the internal network.
+#
+# Image registry note: n8n's own current docs recommend docker.n8n.io/n8nio/
+# n8n over the Docker Hub mirror (n8nio/n8n) — same publisher, current
+# canonical host, verified 2026-08-20 (docs.n8n.io/deploy/host-n8n/
+# install-options/install-with-docker). N8N_RUNNERS_ENABLED is deliberately
+# NOT set: n8n 2.0 (this pin) made task runners the only execution mode and
+# the flag a no-op — see docs.n8n.io/changelog/release-notes-2.x.
+#
+# PIN CHECKPOINT: docker.n8n.io/n8nio/n8n:2.34.1 (verified 2026-08-20 against
+# n8n's own release notes — current stable). Confirm before relying on this
+# comment later.
+
+services:
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:${N8N_VERSION:-2.34.1}
+    container_name: quarantine-n8n
+    restart: unless-stopped
+    profiles: [n8n]
+    networks:
+      - edge
+      - db
+    volumes:
+      # Binary data + local state only — DB holds workflows/credentials/
+      # executions (needs_db: true above).
+      - n8n-data:/home/node/.n8n
+    environment:
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_PORT: 5432
+      # Fixed, not templated: provisioners/postgres.sh derives both the role
+      # and database name from this catalog entry's own name ("n8n", hyphens
+      # -> underscores — moot here) — see file header.
+      DB_POSTGRESDB_DATABASE: n8n
+      DB_POSTGRESDB_USER: n8n
+      DB_POSTGRESDB_PASSWORD: ${DATABASE_PASSWORD_N8N}
+
+      # Generate once, never rotate — see file header.
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
+
+      N8N_HOST: n8n.${DOMAIN}
+      N8N_PROTOCOL: https
+      # External webhook base — n8n bakes this into every generated webhook
+      # URL it shows in the editor, even though Traefik/oauth2-proxy sit in
+      # front of it. Trailing slash matters (n8n's own docs show it).
+      WEBHOOK_URL: https://n8n.${DOMAIN}/
+
+      GENERIC_TIMEZONE: Europe/Tirane
+      TZ: Europe/Tirane
+
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_VERSION_NOTIFICATIONS_ENABLED: "false"
+
+      # Shared with Lazaretto's headless-API contract — see file header.
+      CALLBACK_STATIC_SECRET: ${CALLBACK_STATIC_SECRET_N8N}
+    healthcheck:
+      # 127.0.0.1, not localhost — see apps/first-party/lazaretto/
+      # compose.yaml's identical note on why (some images' /etc/hosts
+      # resolves localhost to ::1 first, and n8n binds 0.0.0.0 / IPv4 only).
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:5678/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    labels:
+      - traefik.enable=true
+      - traefik.http.services.n8n.loadbalancer.server.port=5678
+
+      # public: webhook triggers + n8n's own OAuth2 credential callback — no
+      # platform auth (see file header for why this is safe).
+      - traefik.http.routers.n8n-public.rule=Host(`n8n.${DOMAIN}`) && (PathPrefix(`/webhook`) || PathPrefix(`/webhook-test`) || PathPrefix(`/webhook-waiting`) || Path(`/rest/oauth2-credential/callback`))
+      - traefik.http.routers.n8n-public.entrypoints=websecure
+      - traefik.http.routers.n8n-public.tls=true
+      - traefik.http.routers.n8n-public.priority=50
+      - traefik.http.routers.n8n-public.service=n8n
+
+      # everything else (editor UI, /rest/*, /socket.io) — behind auth
+      - traefik.http.routers.n8n-admin.rule=Host(`n8n.${DOMAIN}`)
+      - traefik.http.routers.n8n-admin.entrypoints=websecure
+      - traefik.http.routers.n8n-admin.tls=true
+      - traefik.http.routers.n8n-admin.priority=10
+      # Order matters: middlewares apply outer-to-inner. oauth2-errors-n8n
+      # must be OUTSIDE oauth2-auth-n8n so it can catch the 401 forwardAuth
+      # short-circuits with — reversed, that 401 hits the browser directly
+      # with no redirect to sign-in (see apps/third-party/uptime-kuma/
+      # compose.yaml's identical ordering note).
+      - traefik.http.routers.n8n-admin.middlewares=oauth2-errors-n8n,oauth2-auth-n8n
+      - traefik.http.routers.n8n-admin.service=n8n
+
+networks:
+  edge:
+    external: true
+  db:
+    name: quarantine-db
+    internal: true
+
+volumes:
+  n8n-data:

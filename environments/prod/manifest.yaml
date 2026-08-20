@@ -23,3 +23,4 @@ apps:
   - name: lazaretto
     version: prod
   - name: searxng
+  - name: n8n
