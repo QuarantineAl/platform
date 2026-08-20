@@ -18,15 +18,6 @@
       "groupName": "Zitadel (api + login)"
     },
     {
-      "description": "Komodo core and periphery are released together at the same version — keep them in lockstep.",
-      "matchManagers": ["docker-compose"],
-      "matchPackageNames": [
-        "ghcr.io/moghtech/komodo-core",
-        "ghcr.io/moghtech/komodo-periphery"
-      ],
-      "groupName": "Komodo (core + periphery)"
-    },
-    {
       "description": "ClickHouse server and keeper need matching versions to avoid protocol/version skew between them.",
       "matchManagers": ["docker-compose"],
       "matchPackageNames": [
