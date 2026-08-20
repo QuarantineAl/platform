@@ -114,15 +114,20 @@ One thing that is *not* part of that default set:
 `catalog.yaml` is the registry of every app `quarantine app add` knows
 how to deploy. Today it holds **lazaretto** (first-party, two-origin,
 OIDC-fronted), **uptime-kuma** (subdomain `status`, no database,
-OIDC-fronted), and **portainer** (internal container management, one
-instance per environment). Neither Lazaretto nor Uptime Kuma has native
-OIDC support, so the OIDC client each entry provisions is actually
-consumed by its own oauth2-proxy forward-auth sidecar, not the app
-directly — one named instance per consumer (see
-`docs/adding-oidc-to-your-app.md`). Uptime Kuma splits public status-page
-paths (unauthenticated) from its admin UI (protected); Lazaretto has no
-public path at all, so both of its routers (frontend + API) are gated
-wholesale.
+OIDC-fronted), **vaultwarden** (subdomain `vault`, OIDC-fronted), and
+**portainer** (internal container management, one instance per
+environment). Lazaretto and Uptime Kuma have no native OIDC support, so
+the OIDC client each entry provisions is actually consumed by its own
+oauth2-proxy forward-auth sidecar, not the app directly — one named
+instance per consumer (see `docs/adding-oidc-to-your-app.md`). Uptime
+Kuma splits public status-page paths (unauthenticated) from its admin UI
+(protected); Lazaretto has no public path at all, so both of its routers
+(frontend + API) are gated wholesale. Vaultwarden is the odd one out: it
+has NATIVE OIDC/SSO support and is deliberately NOT behind oauth2-proxy at
+all — its Bitwarden-protocol clients (browser extension, desktop, mobile)
+never carry a proxy session cookie, so a forward-auth gate in front of the
+whole host would break them. See
+`apps/third-party/vaultwarden/compose.yaml`'s own header.
 
 ```bash
 quarantine app add uptime-kuma --version 1.2.3
