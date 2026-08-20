@@ -1,8 +1,11 @@
 # Host-local state only. Everything under environments/<env>/ that
 # `quarantine init` writes — manifest.yaml, compose.yaml, and the encrypted
 # environments/<env>/secrets.sops.yaml — IS meant to be committed: SOPS
-# ciphertext is safe in git by design (decision 6), and GitOps mode (decision
-# 7) requires Komodo's watched environment directories to be git-tracked.
+# ciphertext is safe in git by design (decision 6), and git is this
+# platform's source of truth regardless of who applies a change (an
+# operator or an environment's own self-hosted CI runner both reconcile
+# from the committed manifest/compose/secrets, via `quarantine start` —
+# see docs/runners-and-sandboxing.md).
 #
 # Only the DECRYPTED runtime artifacts and the age private key are excluded.
 

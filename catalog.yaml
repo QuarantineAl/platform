@@ -153,8 +153,8 @@ apps:
       Internal container-management UI (start/stop, CPU/memory/disk/network
       stats, image updates) — added to both dev and prod, one instance per
       environment, never shared. Local admin auth for now, set via
-      Portainer's own first-login UI (no env var bootstraps a password the
-      way Komodo's did); Portainer CE does support pointing its login
+      Portainer's own first-login UI (no env var bootstraps a password
+      non-interactively); Portainer CE does support pointing its login
       screen at a generic OIDC provider directly (no oauth2-proxy needed),
       which could front it with Zitadel later by flipping needs_oidc to
       true — deferred since the current small number of trusted operators
