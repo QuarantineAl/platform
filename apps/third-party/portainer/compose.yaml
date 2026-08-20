@@ -14,8 +14,8 @@
 #
 # Local admin auth only for now: Portainer's first-login flow creates the
 # admin user interactively (no env var bootstraps a password
-# non-interactively the way KOMODO_INIT_ADMIN_PASSWORD used to), so set it
-# via Portainer's own UI on first visit — https://portainer.${DOMAIN},
+# non-interactively), so set it via Portainer's own UI on first visit —
+# https://portainer.${DOMAIN},
 # within Portainer's own ~5-minute first-login window, or the instance
 # locks itself out of setup and needs a restart to reopen it. Portainer CE
 # does support pointing its login screen directly at a generic OIDC
