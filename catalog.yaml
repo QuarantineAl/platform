@@ -161,19 +161,30 @@ apps:
         generator: hex32
       # Points at the SAME secrets.sops.yaml path provisioners/postgres.sh
       # itself writes (.apps["n8n"].db_password) — not a separate value.
-      # postgres.sh always runs before generate_env_file's generated_secrets
-      # loop in reconcile_apps, so this reuses whatever password postgres.sh
-      # already generated/persisted rather than minting a second one; see
-      # apps/third-party/n8n/compose.yaml's own header for the full
-      # reasoning. env is DATABASE_PASSWORD_N8N, not n8n's own
-      # DB_POSTGRESDB_PASSWORD var name directly — generated_secrets values
-      # land in one flat per-environment .env, so a second future needs_db
-      # app that also happened to want a literally-named
-      # "DB_POSTGRESDB_PASSWORD" would otherwise collide with this one.
-      # apps/third-party/n8n/compose.yaml's own environment block maps this
-      # into the container-facing name n8n actually reads (same shape
-      # vaultwarden's own compose.yaml comment already anticipated for this
-      # exact case — DATABASE_PASSWORD_VAULTWARDEN).
+      # Whichever of postgres.sh / this generated_secrets entry runs first
+      # on a given `quarantine start` mints the real password; the other
+      # then just reads it back, because both call the same generator
+      # (gen_secret alnum32 is gen_password 32 — lib/common.sh) and
+      # reconcile_apps re-decrypts and re-runs generate_env_file AFTER every
+      # provisioner in the manifest loop, so the .env that actually starts
+      # n8n's container always reflects whichever value is final in
+      # secrets.sops.yaml at that point. On a brand-new app's very first
+      # start this entry's own loop actually runs BEFORE postgres.sh (it's
+      # cmd_start's initial generate_env_file call, ahead of
+      # reconcile_apps) and mints the real value itself; postgres.sh then
+      # reuses it. Harmless either way, but worth being precise about which
+      # one is actually first. See apps/third-party/n8n/compose.yaml's own
+      # header for the full reasoning. env is DATABASE_PASSWORD_N8N, not
+      # n8n's own DB_POSTGRESDB_PASSWORD var name directly —
+      # generated_secrets values land in one flat per-environment .env, so
+      # a second future needs_db app that also happened to want a
+      # literally-named "DB_POSTGRESDB_PASSWORD" would otherwise collide
+      # with this one. apps/third-party/n8n/compose.yaml's own environment
+      # block maps this into the container-facing name n8n actually reads
+      # (the shape vaultwarden's own compose.yaml comment already
+      # anticipated for this exact case — DATABASE_PASSWORD_VAULTWARDEN —
+      # though vaultwarden itself is needs_db: false today, so that's a
+      # future precedent, not an existing one).
       - key: db_password
         env: DATABASE_PASSWORD_N8N
         generator: alnum32
@@ -182,9 +193,13 @@ apps:
       # repo) — both sides must hold the same value. If Lazaretto already has
       # one, override this via secrets_edit BEFORE n8n's first
       # `quarantine start` instead of letting it autogenerate; see
-      # apps/third-party/n8n/SETUP.md.
+      # apps/third-party/n8n/SETUP.md. env is CALLBACK_STATIC_SECRET_N8N,
+      # not the bare "CALLBACK_STATIC_SECRET" Lazaretto's own side may use
+      # internally — same flat-.env collision reasoning as db_password
+      # above; only the VALUE has to match between the two repos, not the
+      # variable name holding it on this side.
       - key: callback_static_secret
-        env: CALLBACK_STATIC_SECRET
+        env: CALLBACK_STATIC_SECRET_N8N
         generator: hex32
     notes: >-
       Workflow orchestrator (Community Edition). No native OIDC — the OIDC

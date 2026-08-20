@@ -32,9 +32,13 @@
 # none). The password reaches this container via catalog.yaml's
 # generated_secrets, keyed under the SAME secrets.sops.yaml path
 # provisioners/postgres.sh itself writes (.apps["n8n"].db_password) — no
-# code changes to bin/quarantine needed; generate_env_file's existing
-# generated_secrets loop simply reuses whatever password postgres.sh already
-# persisted, since postgres.sh always runs first in reconcile_apps. Exposed
+# code changes to bin/quarantine needed. Whichever of postgres.sh or that
+# generated_secrets entry runs first on a given `quarantine start` mints
+# the real password and the other reuses it (both call the same
+# generator); the .env that actually starts this container always
+# reflects the final value, since reconcile_apps re-runs generate_env_file
+# after every provisioner. See catalog.yaml's own comment on this entry
+# for the exact ordering on a fresh app's first start. Exposed
 # as ${DATABASE_PASSWORD_N8N} (not literally DB_POSTGRESDB_PASSWORD) in the
 # shared per-environment .env — see catalog.yaml's own comment on this
 # entry's generated_secrets for why, and the environment: block below for
@@ -50,16 +54,21 @@
 # rotating it makes every existing stored credential permanently
 # undecryptable, the same treatment as LAZARETTO_CREDENTIALS_KEY.
 #
-# CALLBACK_STATIC_SECRET is shared with Lazaretto's own headless-API contract
-# (docs/headless-api.md in the lazaretto repo — the X-Callback-Secret header
-# n8n workflows must send when calling Lazaretto's task-callback endpoints).
-# Generated here via generated_secrets like the other two; if Lazaretto
-# already has a fixed value for this, override it here via `secrets_edit`
-# BEFORE the first `quarantine start` for n8n instead of letting it
-# autogenerate — see apps/third-party/n8n/SETUP.md. Not consumed by n8n
-# itself (no such setting exists); it is exposed here purely so workflows
-# built in the editor can reference it as {{$env.CALLBACK_STATIC_SECRET}}
-# when calling Lazaretto over the internal network.
+# CALLBACK_STATIC_SECRET_N8N is shared with Lazaretto's own headless-API
+# contract (docs/headless-api.md in the lazaretto repo — the
+# X-Callback-Secret header n8n workflows must send when calling
+# Lazaretto's task-callback endpoints); only the VALUE has to match
+# Lazaretto's own side, not this variable's name. Generated here via
+# generated_secrets like the other two; if Lazaretto already has a fixed
+# value for this, override it here via `secrets_edit` BEFORE the first
+# `quarantine start` for n8n instead of letting it autogenerate — see
+# apps/third-party/n8n/SETUP.md. Not consumed by n8n itself (no such
+# setting exists); it is exposed here purely so workflows built in the
+# editor can reference it as {{$env.CALLBACK_STATIC_SECRET}} — the
+# container-facing name below, mapped from the host-side
+# ${CALLBACK_STATIC_SECRET_N8N} the same way DB_POSTGRESDB_PASSWORD is
+# mapped from ${DATABASE_PASSWORD_N8N} above — when calling Lazaretto over
+# the internal network.
 #
 # Image registry note: n8n's own current docs recommend docker.n8n.io/n8nio/
 # n8n over the Docker Hub mirror (n8nio/n8n) — same publisher, current
@@ -113,7 +122,7 @@ services:
       N8N_VERSION_NOTIFICATIONS_ENABLED: "false"
 
       # Shared with Lazaretto's headless-API contract — see file header.
-      CALLBACK_STATIC_SECRET: ${CALLBACK_STATIC_SECRET}
+      CALLBACK_STATIC_SECRET: ${CALLBACK_STATIC_SECRET_N8N}
     healthcheck:
       # 127.0.0.1, not localhost — see apps/first-party/lazaretto/
       # compose.yaml's identical note on why (some images' /etc/hosts
