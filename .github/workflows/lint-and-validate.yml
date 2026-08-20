@@ -115,7 +115,7 @@ jobs:
           OIDC_CLIENT_SECRET_N8N=dummy-oidc-client-secret
           DATABASE_PASSWORD_N8N=dummy-n8n-db-password
           N8N_ENCRYPTION_KEY=dummy-n8n-encryption-key
-          CALLBACK_STATIC_SECRET=dummy-callback-static-secret
+          CALLBACK_STATIC_SECRET_N8N=dummy-callback-static-secret
           EOF
 
       - name: docker compose config (observability + uptime-kuma + portainer + lazaretto + qualitech + searxng + n8n profiles)

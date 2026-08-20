@@ -93,12 +93,14 @@ Reference, in the `lazaretto` repo, before building any workflow that calls
 Lazaretto:
 
 - `docs/headless-api.md` — the task API surface itself.
-- The `X-Callback-Secret` header — must equal this environment's
-  `CALLBACK_STATIC_SECRET` (see `apps/third-party/n8n/compose.yaml`'s own
-  comment and `catalog.yaml`'s `generated_secrets` entry for this app —
-  generated automatically on n8n's first `quarantine start` unless
-  Lazaretto already has a fixed value, in which case override it via
-  `secrets_edit` before that first start instead).
+- The `X-Callback-Secret` header — must equal the value n8n's own
+  container sees as `CALLBACK_STATIC_SECRET` (stored in secrets.sops.yaml
+  and exported to n8n's `.env` as `CALLBACK_STATIC_SECRET_N8N` — see
+  `apps/third-party/n8n/compose.yaml`'s own comment and `catalog.yaml`'s
+  `generated_secrets` entry for this app). Generated automatically on
+  n8n's first `quarantine start` unless Lazaretto already has a fixed
+  value, in which case override `.apps["n8n"].callback_static_secret` via
+  `secrets_edit` before that first start instead.
 - Direction matters: workflows call OUT to Lazaretto's headless API using
   the OAuth2 credential from step 4 (over whatever host Lazaretto's own
   docs specify). The *callback* runs the other way — when a long-running
