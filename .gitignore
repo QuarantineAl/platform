@@ -2,10 +2,13 @@
 # `quarantine init` writes — manifest.yaml, compose.yaml, and the encrypted
 # environments/<env>/secrets.sops.yaml — IS meant to be committed: SOPS
 # ciphertext is safe in git by design (decision 6), and git is this
-# platform's source of truth regardless of who applies a change (an
-# operator or an environment's own self-hosted CI runner both reconcile
-# from the committed manifest/compose/secrets, via `quarantine start` —
-# see docs/runners-and-sandboxing.md).
+# platform's source of truth regardless of who applies a change. An
+# app's own CI deploy never touches these files or runs a bare
+# `quarantine start` (docs/runners-and-sandboxing.md — that could recreate
+# the runner's own container mid-job); it's an operator by hand, or
+# `.github/workflows/deploy-platform.yml`'s full reconcile
+# (QUARANTINE_SKIP_RUNNER=true), that actually applies a change to these
+# files via `quarantine start`.
 #
 # Only the DECRYPTED runtime artifacts and the age private key are excluded.
 
