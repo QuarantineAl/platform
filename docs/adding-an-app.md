@@ -135,17 +135,38 @@ invoke `provisioners/*.sh` directly in normal use.
 Whether this step applies — and what it looks like — depends on *which*
 kind of secret the app needs:
 
-- **The app's Postgres password (`needs_db: true`)** — nothing to wire.
-  `provisioners/postgres.sh` reads `.apps["<name>"].db_password` out of
-  `secrets.sops.yaml` and, if it's missing or still a `CHANGEME*`
-  placeholder, generates one with `gen_password` and persists it via
-  `secrets_set` — the same lazy-generate-on-first-run behavior already used
-  for Zitadel's own database password. It's worth adding a
+- **The app's Postgres password (`needs_db: true`)** — nothing to wire on
+  the secrets.sops.yaml side. `provisioners/postgres.sh` reads
+  `.apps["<name>"].db_password` out of `secrets.sops.yaml` and, if it's
+  missing or still a `CHANGEME*` placeholder, generates one with
+  `gen_password` and persists it via `secrets_set` — the same
+  lazy-generate-on-first-run behavior already used for Zitadel's own
+  database password. It's worth adding a
   `db_password: "CHANGEME-generated-on-first-start"` line under
   `apps.<name>:` in `environments/_template/secrets.example.yaml` anyway, purely
   so the key is discoverable/documented — but it does **not** need to go in
   `bin/quarantine`'s `REQUIRED_SECRET_KEYS` array, and `quarantine init`
   never sees or generates it.
+
+  That's only half of it, though: nothing above gets the password INTO
+  your app's own compose environment as a usable `${VAR}` — unlike
+  `needs_oidc`, there is no generic `DATABASE_PASSWORD_<APP>` injection in
+  `bin/quarantine` (confirmed by reading `generate_env_file`: it has an
+  OIDC block, but no equivalent one for `needs_db`). The way n8n
+  (`apps/third-party/n8n/compose.yaml`, `catalog.yaml`'s `n8n` entry — the
+  first `needs_db: true` catalog app) solves this without touching
+  `bin/quarantine`: add a `generated_secrets` entry whose `key` is the
+  exact same `db_password` postgres.sh already writes, e.g.
+  `{key: db_password, env: DATABASE_PASSWORD_<APP>, generator: alnum32}`.
+  `generate_env_file`'s existing `generated_secrets` loop then reads that
+  same secrets.sops.yaml value back out and exports it — reusing whichever
+  of postgres.sh or that loop happened to generate it first, since both
+  call the same generator and reconcile_apps re-runs generate_env_file
+  after every provisioner has run. Use an app-namespaced `env` name
+  (`DATABASE_PASSWORD_<APP>`, not your app's own literal
+  `DB_POSTGRESDB_PASSWORD`-style var) — `generated_secrets` values land in
+  one flat per-environment `.env`, so a bare, non-namespaced name risks
+  colliding with a future app's own generated secret.
 - **The app's OIDC client id/secret (`needs_oidc: true`)** — nothing to
   wire, full stop. `provisioners/zitadel.sh` persists
   `.apps["<name>"].oidc_client_id` / `.oidc_client_secret` into

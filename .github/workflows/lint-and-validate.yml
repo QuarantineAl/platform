@@ -13,7 +13,7 @@
 #   2. compose-validate — `docker compose config` against
 #      environments/_template/compose.yaml with every profile flag
 #      (observability, uptime-kuma, portainer, lazaretto, qualitech,
-#      searxng), to
+#      searxng, n8n), to
 #      structurally validate the assembled compose graph (include: resolution, var
 #      interpolation, profile gating) parses and merges cleanly. This needs
 #      *some* value for every ${VAR} the included fragments reference —
@@ -110,9 +110,15 @@ jobs:
           QUALITECH_VERSION=dummy
           SEARXNG_VERSION=2026.8.10-0a118066d
           SEARXNG_SECRET=dummy-searxng-secret
+          N8N_VERSION=2.34.1
+          OIDC_CLIENT_ID_N8N=dummy-oidc-client-id
+          OIDC_CLIENT_SECRET_N8N=dummy-oidc-client-secret
+          DATABASE_PASSWORD_N8N=dummy-n8n-db-password
+          N8N_ENCRYPTION_KEY=dummy-n8n-encryption-key
+          CALLBACK_STATIC_SECRET_N8N=dummy-callback-static-secret
           EOF
 
-      - name: docker compose config (observability + uptime-kuma + portainer + lazaretto + qualitech + searxng profiles)
+      - name: docker compose config (observability + uptime-kuma + portainer + lazaretto + qualitech + searxng + n8n profiles)
         shell: bash
         working-directory: environments/_template
         run: |
@@ -125,5 +131,6 @@ jobs:
             --profile lazaretto \
             --profile qualitech \
             --profile searxng \
+            --profile n8n \
             -f compose.yaml \
             config
