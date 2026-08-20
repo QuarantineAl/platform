@@ -47,3 +47,4 @@ include:
   - path: ../../apps/third-party/uptime-kuma/compose.yaml
   - path: ../../apps/third-party/portainer/compose.yaml
   - path: ../../apps/third-party/searxng/compose.yaml
+  - path: ../../apps/third-party/vaultwarden/compose.yaml

@@ -100,6 +100,49 @@ apps:
       from inside this host only — an external uptime probe is a separate,
       out-of-scope concern (see docs/architecture.md).
 
+  - name: vaultwarden
+    kind: app
+    compose_path: apps/third-party/vaultwarden/compose.yaml
+    subdomain: vault
+    needs_db: false
+    needs_oidc: true
+    oidc_redirect_uris:
+      - "https://vault.${DOMAIN}/identity/connect/oidc-signin"
+    generated_secrets:
+      # ADMIN_TOKEN for Vaultwarden's own /admin panel — unrelated to
+      # OIDC/Zitadel. alnum32, same generator/treatment as the Zitadel
+      # masterkey and Postgres admin password: a random secret at rest in
+      # secrets.sops.yaml. /admin is internet-reachable (unlike those
+      # two), so production should upgrade this to an Argon2 PHC hash by
+      # hand once running — see secrets.example.yaml's own comment on
+      # apps.vaultwarden.admin_token and this compose fragment's comment
+      # on ADMIN_TOKEN for how.
+      - key: admin_token
+        env: VAULTWARDEN_ADMIN_TOKEN
+        generator: alnum32
+    notes: >-
+      Vaultwarden has NATIVE OIDC/SSO support — unlike uptime-kuma and
+      lazaretto, the OIDC client this entry provisions is consumed
+      DIRECTLY by Vaultwarden itself, never by an oauth2-proxy sidecar
+      (no oauth2-proxy-vaultwarden block exists in infra/edge/oauth2-proxy/
+      compose.yaml, and none is needed). Deliberately not fronted by
+      forward-auth at all: Bitwarden's native clients (browser extension,
+      desktop, mobile, CLI) talk to /api, /identity, and the
+      /notifications websocket hub directly using Bitwarden's own wire
+      protocol, never through a browser session — a forwardAuth gate in
+      front of the whole host would 401 every one of those calls, none of
+      which will ever carry an oauth2-proxy session cookie. Same shape
+      the portainer entry below already names as legitimate ("Portainer
+      CE does support pointing its login screen at a generic OIDC
+      provider directly, no oauth2-proxy needed") — Vaultwarden is the
+      first app in this catalog to actually take that path. See
+      apps/third-party/vaultwarden/compose.yaml's own header for the
+      current callback path (/identity/connect/oidc-signin — older
+      tutorials reference a stale /sso/callback or /oidc/callback that
+      404s on current releases), the ADMIN_TOKEN/Argon2 hardening note,
+      and the open upstream issue on SIGNUPS_ALLOWED not being a complete
+      stop on SSO-driven account creation.
+
   - name: portainer
     kind: app
     compose_path: apps/third-party/portainer/compose.yaml
