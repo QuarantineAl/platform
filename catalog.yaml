@@ -143,6 +143,68 @@ apps:
       and the open upstream issue on SIGNUPS_ALLOWED not being a complete
       stop on SSO-driven account creation.
 
+  - name: n8n
+    kind: app
+    compose_path: apps/third-party/n8n/compose.yaml
+    subdomain: n8n
+    needs_db: true
+    needs_oidc: true
+    oidc_redirect_uris:
+      - "https://n8n.${DOMAIN}/oauth2/callback"
+    generated_secrets:
+      # AES master key for n8n's own Credentials feature (stored OAuth
+      # tokens, API keys) — generate once, never rotate: rotating it makes
+      # every existing stored credential permanently undecryptable. Same
+      # treatment as lazaretto's credentials_key above.
+      - key: encryption_key
+        env: N8N_ENCRYPTION_KEY
+        generator: hex32
+      # Points at the SAME secrets.sops.yaml path provisioners/postgres.sh
+      # itself writes (.apps["n8n"].db_password) — not a separate value.
+      # postgres.sh always runs before generate_env_file's generated_secrets
+      # loop in reconcile_apps, so this reuses whatever password postgres.sh
+      # already generated/persisted rather than minting a second one; see
+      # apps/third-party/n8n/compose.yaml's own header for the full
+      # reasoning. env is DATABASE_PASSWORD_N8N, not n8n's own
+      # DB_POSTGRESDB_PASSWORD var name directly — generated_secrets values
+      # land in one flat per-environment .env, so a second future needs_db
+      # app that also happened to want a literally-named
+      # "DB_POSTGRESDB_PASSWORD" would otherwise collide with this one.
+      # apps/third-party/n8n/compose.yaml's own environment block maps this
+      # into the container-facing name n8n actually reads (same shape
+      # vaultwarden's own compose.yaml comment already anticipated for this
+      # exact case — DATABASE_PASSWORD_VAULTWARDEN).
+      - key: db_password
+        env: DATABASE_PASSWORD_N8N
+        generator: alnum32
+      # Shared with Lazaretto's own headless-API callback contract
+      # (X-Callback-Secret header, docs/headless-api.md in the lazaretto
+      # repo) — both sides must hold the same value. If Lazaretto already has
+      # one, override this via secrets_edit BEFORE n8n's first
+      # `quarantine start` instead of letting it autogenerate; see
+      # apps/third-party/n8n/SETUP.md.
+      - key: callback_static_secret
+        env: CALLBACK_STATIC_SECRET
+        generator: hex32
+    notes: >-
+      Workflow orchestrator (Community Edition). No native OIDC — the OIDC
+      client this entry provisions is consumed by the oauth2-proxy-n8n
+      sidecar (infra/edge/oauth2-proxy/compose.yaml), gating the editor UI
+      and admin routes only. Two path groups bypass forward-auth entirely
+      via a higher-priority Traefik router with no auth middleware (see
+      apps/third-party/n8n/compose.yaml): /webhook*, /webhook-test*,
+      /webhook-waiting* (external and internal workflow triggers — each
+      protected by n8n's own per-webhook auth setting instead, not a
+      platform concern) and /rest/oauth2-credential/callback (n8n's own
+      OAuth2 redirect target for credentials, which breaks behind an auth
+      wall). The first catalog app to use the shared Postgres instance
+      (needs_db: true) rather than its own SQLite volume — see that
+      compose fragment's header for how the DB password reaches its
+      environment with no changes to bin/quarantine. Production workflows
+      are exported as JSON and committed under
+      apps/third-party/n8n/workflows/ — n8n's own database is runtime
+      state, not source of truth (see that directory's README).
+
   - name: portainer
     kind: app
     compose_path: apps/third-party/portainer/compose.yaml
