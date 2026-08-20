@@ -236,3 +236,7 @@ next deploy's `git pull` will conflict with it.
   `install.sh` through day-2 operations.
 - [`docs/runners-and-sandboxing.md`](docs/runners-and-sandboxing.md) — the
   CI runner and PR-sandbox model for both dev and prod.
+- [`docs/vm-sizing-and-provisioning.md`](docs/vm-sizing-and-provisioning.md) —
+  how to size an Incus VM for this platform, how to grow one that already
+  exists (it needs a stop/start — memory cannot be hot-added), and the guest
+  setup every VM needs. Read it before adding tenants to a host.
