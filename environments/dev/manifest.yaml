@@ -19,12 +19,6 @@
 #   quarantine app add uptime-kuma --version 1.2.3
 #   quarantine start
 #
-# gitops: true starts Komodo (GitOps continuous deployment) alongside core
-# infra. There's no CLI flag for this — hand-edit it in, then
-# `quarantine start` to apply. See docs/gitops-prod.md for when you'd want
-# this (omit entirely, or leave as `false`, for a plain CLI-managed
-# environment — the default and simplest mode).
-#
 # observability: true starts the otel-collector + SigNoz stack (7 containers,
 # ~1.5 GB RAM). OPT-IN: omit it, or leave it false, and `quarantine start`
 # simply does not bring it up. It is never STOPPED by this flag — turning
