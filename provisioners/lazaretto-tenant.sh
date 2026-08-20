@@ -296,14 +296,109 @@ export_tenant_secrets() {
   done
 }
 
-# --- bringing a tenant up ----------------------------------------------------
-# Resource limits are per instance and scaled to the tenant, from measurements
-# on the live dev host: an idle trio costs ~67 MiB and a concurrent agent turn
-# ~250 MiB, so memory is ~= 250 MiB x concurrency + 200 MiB headroom.
-# CLI_MAX_CONCURRENT matters most: the backend defaults it to 4 PER PROCESS, so
-# twenty instances would allow eighty concurrent turns — roughly 20 GiB of
-# unbounded demand against a host with no swap.
+# --- resource sizing ---------------------------------------------------------
+# Per instance and scaled to the tenant. These numbers are re-derived from
+# PRODUCTION OOM DATA, not from the idle-host measurement they replace
+# (~67 MiB idle, ~250 MiB per turn), which was ~2.2x too low and killed real
+# turns: quarantine-qualitech-lazaretto-backend recorded oom_kill 5 and hit its
+# 1200 MiB ceiling 13,285 times. Full derivation, with the kernel's per-task
+# OOM dumps and the arithmetic, is in lazaretto's own
+# docs/PER_TENANT_CONTAINER_PLAN.md section 7a.
 #
+#   mem_limit(C) = 100 + 450*C + 700*max(1, ceil(C/4)) + 100   MiB
+#                  base   turns  one heavy tool run       page cache
+#
+# The term the old model lacked entirely is the third one: what the agent's
+# Bash tool RUNS. Every observed kill had an npm test/build/lint in flight,
+# contributing 315-694 MiB — more than either concurrent turn beside it. In one
+# event only TWO of the four permitted turns were even running.
+#
+# Two things below are load-bearing for that ceiling and are not decoration:
+#
+# * LAZARETTO_CPUS. Node reads the cgroup CPU quota in
+#   os.availableParallelism(), and every JS toolchain sizes its worker pool
+#   from it — jest runs availableParallelism-1 workers. Verified on the dev
+#   host: uncapped reports 4, --cpus 2 reports 2, --cpus 1.5 reports 1. At 2, a
+#   jest run uses one worker and the heavy-tool term falls from ~640 MiB to
+#   ~250. That is a bigger saving than any plausible increase to mem_limit, and
+#   it is what keeps "one heavy tool run at a time" true rather than hoped.
+#
+# * LAZARETTO_MEMSWAP_LIMIT. Docker derives MemorySwap = 2 x Memory when only
+#   mem_limit is set, which is the value we want — but setting the two EQUAL is
+#   runc's signal to disable swap outright (it writes memory.swap.max=0). So
+#   `docker update --memory Xg --memory-swap Xg`, the obvious way to widen a
+#   ceiling during an incident, silently removes the container's shock absorber
+#   at the same moment. That is exactly what happened to qualitech, leaving it
+#   the only one of four backends with swap disabled. Stated explicitly here so
+#   the intent survives the next hand-edit.
+#
+# THE VM MUST ACTUALLY HAVE SWAP for the second one to mean anything. With
+# none, there is nothing to reclaim and pressure goes straight to a SIGKILL:
+# at kill time the cgroup held anon 359 MiB against file 78 MiB, and the kernel
+# scanned 2.2M pages to steal 642K before giving up. See
+# docs/vm-sizing-and-provisioning.md.
+
+# Memory ceiling in MiB for a given concurrency.
+tenant_mem_limit_mib() {
+  local c="$1" heavy
+  # ceil(c/4), floored at 1 — how many simultaneous heavy tool runs to budget.
+  heavy=$(( (c + 3) / 4 ))
+  (( heavy >= 1 )) || heavy=1
+  printf '%s' "$(( 100 + 450 * c + 700 * heavy + 100 ))"
+}
+
+# Warns when the lazaretto ceilings on this host approach what it can back.
+# mem_limit is a ceiling, not a reservation, so oversubscription is legal and
+# usually fine — tenants rarely peak together, and two of the three prod
+# tenants have never run a turn at all. It is worth saying out loud anyway,
+# because the failure mode changes shape: a per-container OOM costs one turn,
+# while a VM-wide OOM picks by resident size and takes postgres, traefik or
+# zitadel with it.
+#
+# Deliberately a warning and not a die — refusing to start a tenant over an
+# arithmetic estimate would be worse than the risk it guards.
+#
+# The threshold is 85% rather than 100% on purpose. A guard that only fires
+# once the sum already exceeds capacity tells you at the moment it is too late
+# to plan, and it cannot distinguish "comfortably full" from "one tenant away
+# from trouble". Prod today sums to 9000 MiB against ~9500 of capacity — 95%,
+# which fits on paper and is exactly the state worth hearing about.
+warn_if_host_oversubscribed() {
+  local incoming_tenant="$1" incoming_mib="$2"
+  local mem_mib swap_mib capacity_mib total_mib=0 name limit_bytes
+
+  mem_mib=$(( $(awk '/^MemTotal:/{print $2}' /proc/meminfo 2>/dev/null || echo 0) / 1024 ))
+  swap_mib=$(( $(awk '/^SwapTotal:/{print $2}' /proc/meminfo 2>/dev/null || echo 0) / 1024 ))
+  (( mem_mib > 0 )) || return 0
+
+  # Reserve for everything that is not a lazaretto backend. Measured on the
+  # prod VM: ~1280 MiB of other containers (traefik, postgres, zitadel x2,
+  # searxng, portainer, a runner) plus ~1230 MiB of dockerd/containerd anon,
+  # unreclaimable slab and page tables.
+  local reserve_mib=2500
+  capacity_mib=$(( mem_mib + swap_mib - reserve_mib ))
+  (( capacity_mib > 0 )) || return 0
+
+  while read -r name; do
+    [[ -n "$name" ]] || continue
+    # The tenant being brought up is counted from the incoming value, not from
+    # whatever its currently-running container happens to hold.
+    [[ "$name" == "$(tenant_backend "$incoming_tenant")" ]] && continue
+    limit_bytes="$(docker inspect -f '{{.HostConfig.Memory}}' "$name" 2>/dev/null || echo 0)"
+    [[ "$limit_bytes" =~ ^[0-9]+$ ]] || limit_bytes=0
+    total_mib=$(( total_mib + limit_bytes / 1048576 ))
+  done < <(docker ps -a --filter 'name=lazaretto-backend' --format '{{.Names}}' 2>/dev/null || true)
+
+  total_mib=$(( total_mib + incoming_mib ))
+  local pct=$(( total_mib * 100 / capacity_mib ))
+  if (( pct >= 85 )); then
+    warn "lazaretto memory ceilings on this host now total ${total_mib} MiB — ${pct}% of the ~${capacity_mib} MiB it can back (${mem_mib} MiB RAM + ${swap_mib} MiB swap - ${reserve_mib} MiB for everything else)."
+    warn "A ceiling is not a reservation, so this is legal and probably fine today. But if these tenants ever peak together the VM-wide OOM killer picks by resident size, and it may take postgres or traefik instead of one turn."
+    warn "Fixes, cheapest first: add swap, lower a tenant's --concurrency, or grow the VM. See docs/vm-sizing-and-provisioning.md."
+  fi
+}
+
+# --- bringing a tenant up ----------------------------------------------------
 # tenant_up <tenant> [pull]
 #
 # `pull` re-fetches the image tag before recreating, and is passed ONLY by the
@@ -326,9 +421,15 @@ tenant_up() {
   # allowlist is actually consulted. See the header.
   export LAZARETTO_EMAIL_DOMAINS=""
   export LAZARETTO_CLI_MAX_CONCURRENT="$concurrency"
-  export LAZARETTO_MEM_LIMIT="$(( 250 * concurrency + 200 ))m"
+  local mem_mib; mem_mib="$(tenant_mem_limit_mib "$concurrency")"
+  export LAZARETTO_MEM_LIMIT="${mem_mib}m"
+  # mem_limit plus an equal amount of swap. Must not equal LAZARETTO_MEM_LIMIT
+  # — see the header for why that disables swap rather than capping it.
+  export LAZARETTO_MEMSWAP_LIMIT="$(( mem_mib * 2 ))m"
+  export LAZARETTO_CPUS=2
   export LAZARETTO_PIDS_LIMIT=512
   export_tenant_secrets "$t"
+  warn_if_host_oversubscribed "$t" "$mem_mib"
 
   # --wait is what makes a fleet-wide rollout safe to automate: without it
   # `up -d` returns the moment containers are STARTED, so a backend that boots
@@ -345,7 +446,7 @@ tenant_up() {
   local -a up_args=(up -d --wait --wait-timeout 180)
   [[ "$pull" == pull ]] && up_args+=(--pull always)
 
-  log "bringing up tenant '${t}' (project $(tenant_project "$t"), image tag ${version}, concurrency ${concurrency}, mem ${LAZARETTO_MEM_LIMIT}${pull:+, pulling})"
+  log "bringing up tenant '${t}' (project $(tenant_project "$t"), image tag ${version}, concurrency ${concurrency}, mem ${LAZARETTO_MEM_LIMIT}, swap +${LAZARETTO_MEM_LIMIT}, cpus ${LAZARETTO_CPUS}${pull:+, pulling})"
   qcompose_scoped "$(tenant_project "$t")" "$env" \
     -f "$COMPOSE_APP" -f "$COMPOSE_PROXY" \
     --profile "$APP_NAME" "${up_args[@]}"
