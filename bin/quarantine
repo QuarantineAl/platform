@@ -1048,6 +1048,80 @@ cmd_user() {
 }
 
 # ---------------------------------------------------------------------------
+# machine — service-account (non-human) identities, e.g. an n8n workflow
+# calling Lazaretto's headless API with no person behind it. See
+# provisioners/zitadel.sh's own header for why this is a machine user, not a
+# Project Application.
+# ---------------------------------------------------------------------------
+cmd_machine() {
+  load_config
+  local subcmd="${1:-}"
+  [[ $# -gt 0 ]] && shift
+  case "$subcmd" in
+    # add/remove touch secrets.sops.yaml (the generated client secret) —
+    # unlike every `user` verb, which persists nothing locally at all. Locked
+    # for the same reason _tenant's add|purge is: two concurrent onboardings
+    # of the same machine user must not race on the same secrets key.
+    add)    [[ $# -ge 1 ]] || die "usage: quarantine machine add <username> [--display-name D]"
+            acquire_lock "$QUARANTINE_REPO" "$QUARANTINE_ENV"
+            _zitadel machine-add "$@" ;;
+    remove) [[ $# -eq 1 ]] || die "usage: quarantine machine remove <username>"
+            acquire_lock "$QUARANTINE_REPO" "$QUARANTINE_ENV"
+            _zitadel machine-remove "$@" ;;
+    list)   _zitadel machine-list "$@" ;;
+    show)   [[ $# -ge 1 ]] || die "usage: quarantine machine show <username> [--json]"
+            _zitadel machine-show "$@" ;;
+    grant)  [[ $# -eq 3 ]] || die "usage: quarantine machine grant <username> <app> <role>"
+            _require_oidc_app "$2"
+            _zitadel machine-grant "$@" ;;
+    revoke) [[ $# -eq 3 ]] || die "usage: quarantine machine revoke <username> <app> <role>"
+            _require_oidc_app "$2"
+            _zitadel machine-revoke "$@" ;;
+    onboard) cmd_machine_onboard "$@" ;;
+    *) usage >&2; die "unknown 'machine' subcommand: ${subcmd}" ;;
+  esac
+}
+
+# cmd_machine_onboard — the composite: create the machine identity, then
+# grant it a role, in one call. Same wrapper-not-a-third-code-path philosophy
+# as cmd_tenant_onboard: `machine add` + `machine grant` run by hand are
+# byte-for-byte equivalent to this.
+cmd_machine_onboard() {
+  [[ $# -ge 1 ]] || die "usage: quarantine machine onboard <username> --grant <app> <role> [--display-name D]"
+  local mname="$1"; shift
+  local app="" role="" display_name=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --grant)
+        app="${2:?--grant requires <app> <role>}"
+        role="${3:?--grant requires <app> <role>}"
+        # A dropped role (`--grant n8n --display-name ...`) would otherwise
+        # let the NEXT flag fill $3 silently, passing this check and only
+        # failing after machine-add has already created the Zitadel user
+        # and persisted its client secret. Catch it here, before anything
+        # runs.
+        [[ "$app" != -* && "$role" != -* ]] \
+          || die "--grant requires <app> <role> as its next two arguments, not a flag: got '${app}' '${role}'"
+        shift 3 ;;
+      --display-name) display_name="${2:?--display-name requires a value}"; shift 2 ;;
+      *) die "unknown argument to machine onboard: $1" ;;
+    esac
+  done
+  [[ -n "$app" && -n "$role" ]] || die "machine onboard: --grant <app> <role> is required"
+  _require_oidc_app "$app"
+
+  log "onboard 1/2: Zitadel machine identity for ${mname}"
+  local -a add_args=("$mname")
+  [[ -n "$display_name" ]] && add_args+=(--display-name "$display_name")
+  acquire_lock "$QUARANTINE_REPO" "$QUARANTINE_ENV"
+  _zitadel machine-add "${add_args[@]}"
+
+  log "onboard 2/2: granting '${role}' on '${app}'"
+  _zitadel machine-grant "$mname" "$app" "$role"
+}
+
+# ---------------------------------------------------------------------------
 # tenant — one Lazaretto instance per tenant
 # ---------------------------------------------------------------------------
 
@@ -1289,6 +1363,26 @@ Commands:
   An identity alone grants no access to anything: reaching a Lazaretto
   instance also needs membership of a tenant. See 'quarantine tenant'.
 
+  machine onboard <username> --grant <app> <role> [--display-name D]
+                          Create a Zitadel machine (service-account) user
+                          and grant it a project role, in one call. For an
+                          automation account with no person behind it (e.g.
+                          an n8n workflow calling Lazaretto's headless API)
+                          -- not an Application; see
+                          provisioners/zitadel.sh's own header for why.
+  machine add <username> [--display-name D]
+                          Create the machine identity alone. Idempotent by
+                          username; the generated client secret is shown
+                          ONCE and persisted to secrets.sops.yaml.
+  machine list [--query S] [--json]
+  machine show <username> [--json]
+                          Re-display the client_id/client_secret without
+                          regenerating (regenerating breaks whatever
+                          downstream credential already has the old one).
+  machine remove <username>
+  machine grant <username> <app> <role>
+  machine revoke <username> <app> <role>
+
   tenant onboard <tenant> --email <e> [--invite]
                           Create the person and give them their own tenant.
   tenant add <tenant> --email <e>[,<e>...] [--version V] [--concurrency N]
@@ -1340,6 +1434,7 @@ main() {
       esac
       ;;
     user) cmd_user "$@" ;;
+    machine) cmd_machine "$@" ;;
     tenant) cmd_tenant "$@" ;;
     status) cmd_status "$@" ;;
     version) cmd_version "$@" ;;
