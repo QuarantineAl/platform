@@ -123,6 +123,55 @@
 #       offered. --invite is strongly preferred either way — it keeps this
 #       platform out of the business of handling passwords at all.
 #
+#   provisioners/zitadel.sh machine-add    <repo_root> <env> <secrets> <username> [--display-name D]
+#   provisioners/zitadel.sh machine-list   <repo_root> <env> <secrets> [--query <substr>] [--json]
+#   provisioners/zitadel.sh machine-show   <repo_root> <env> <secrets> <username> [--json]
+#   provisioners/zitadel.sh machine-remove <repo_root> <env> <secrets> <username>
+#   provisioners/zitadel.sh machine-grant  <repo_root> <env> <secrets> <username> <canonical_name> <role>
+#   provisioners/zitadel.sh machine-revoke <repo_root> <env> <secrets> <username> <canonical_name> <role>
+#       Machine (service-account) identity management — the automation-account
+#       counterpart to the human user-* modes above, for the case where
+#       something calls an API with no person behind it (e.g. an n8n workflow
+#       calling Lazaretto's headless API). Deliberately NOT an Application:
+#       Zitadel's own client-credentials guide for service accounts confirms a
+#       machine user plus a generated client secret is sufficient for the
+#       OAuth2 client_credentials grant — no Project Application, no
+#       oidc_redirect_uris, nothing catalog.yaml-related. Applications (the
+#       "ensure" mode above) exist for a DIFFERENT thing entirely: an OIDC
+#       client that puts a human through a browser login. A username IS the
+#       client_id Zitadel hands back (confirmed in AddSecret's own docs: "the
+#       client id is the user's username"), so these modes never need to
+#       resolve or persist one separately.
+#
+#       machine-add generates and persists a client SECRET (AddSecret is a
+#       write-once reveal, same as an Application's own GenerateClientSecret)
+#       to secrets.sops.yaml at .machines["<username>"].client_secret — the
+#       one thing about a machine user that can't be re-derived from Zitadel
+#       later, unlike everything human-user-shaped above, which persists
+#       nothing locally at all. machine-show reads it back for re-display
+#       without regenerating (regenerating would invalidate whatever's
+#       already pasted into a downstream credential, e.g. n8n's own OAuth2
+#       credential for Lazaretto — see apps/third-party/n8n/SETUP.md).
+#
+#       machine-grant/machine-revoke reuse the exact same project-role
+#       read-modify-write as user-grant/user-revoke (a UserGrant is keyed on
+#       userId regardless of whether that user is human or machine), just
+#       resolving <username> via a machine-scoped search instead of by email.
+#
+#       UNTESTED AGAINST A LIVE INSTANCE as of this writing — unlike every
+#       API decision documented above this point, which the user-* modes'
+#       own history confirms live before trusting docs (several documented
+#       paths there turned out wrong). CreateUser's machine variant
+#       (POST /v2/users/new, a "machine": {"name", "description",
+#       "accessTokenType"} field) and AddSecret (POST /v2/users/{id}/secret)
+#       are corroborated across Zitadel's own proto source and API reference
+#       docs, but not confirmed against a running instance the way every
+#       other endpoint here has been. Verify machine-add end to end
+#       (including the exact response field for the new user's id — sources
+#       disagreed between "userId" and "id") on the first real run and correct
+#       this comment once confirmed, the same way this file's own history
+#       already did once for the human user-* modes.
+#
 # All apps share one Zitadel project ("quarantine-apps"), each as its own
 # OIDC application within it — one org, one project, one app-per-catalog-app
 # (or, under the shared-Application mode above, one app per catalog app
@@ -161,12 +210,13 @@ MODE="ensure"
 case "${1:-}" in
   add-redirect|remove-redirect|list-redirects|ensure-features| \
   user-add|user-list|user-show|user-remove|user-invite|user-grant|user-revoke| \
-  app-add-role|app-list-roles)
+  app-add-role|app-list-roles| \
+  machine-add|machine-list|machine-show|machine-remove|machine-grant|machine-revoke)
     MODE="$1"; shift ;;
 esac
 
 redirect_uri="" name="" email="" role="" role_display_name="" role_group=""
-given_name="" family_name="" list_query=""
+given_name="" family_name="" list_query="" username="" machine_display_name=""
 want_json=false want_invite=false want_password_stdin=false
 
 # Every mode except the two that predate this block takes the same three
@@ -248,6 +298,39 @@ case "$MODE" in
         *) die "unknown argument to user-list: $1" ;;
       esac
     done ;;
+  machine-add)
+    _take_common "$@"; shift 3
+    [[ $# -ge 1 ]] || die "usage: provisioners/zitadel.sh machine-add <repo_root> <env> <plaintext_secrets_file> <username> [--display-name D]"
+    username="$1"; shift
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --display-name) machine_display_name="${2:?--display-name requires a value}"; shift 2 ;;
+        *) die "unknown argument to machine-add: $1" ;;
+      esac
+    done ;;
+  machine-show|machine-remove)
+    _take_common "$@"; shift 3
+    [[ $# -ge 1 ]] || die "usage: provisioners/zitadel.sh ${MODE} <repo_root> <env> <plaintext_secrets_file> <username> [--json]"
+    username="$1"; shift
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --json) want_json=true; shift ;;
+        *) die "unknown argument to ${MODE}: $1" ;;
+      esac
+    done ;;
+  machine-list)
+    _take_common "$@"; shift 3
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --json) want_json=true; shift ;;
+        --query) list_query="${2:?--query requires a value}"; shift 2 ;;
+        *) die "unknown argument to machine-list: $1" ;;
+      esac
+    done ;;
+  machine-grant|machine-revoke)
+    _take_common "$@"; shift 3
+    [[ $# -eq 3 ]] || die "usage: provisioners/zitadel.sh ${MODE} <repo_root> <env> <plaintext_secrets_file> <username> <canonical_name> <role>"
+    username="$1" name="$2" role="$3" ;;
 esac
 
 [[ -f "$plaintext_file" ]] || die "plaintext secrets file not found: $plaintext_file"
@@ -272,7 +355,15 @@ if [[ -n "$role" ]]; then
   [[ "$role" =~ ^[A-Za-z0-9._:-]+$ ]] \
     || die "invalid role '${role}': letters, digits, dot, underscore, colon, hyphen only"
 fi
-for _v in "$given_name" "$family_name" "$role_display_name" "$role_group" "$list_query"; do
+if [[ -n "$username" ]]; then
+  # Zitadel's own username charset is broader than this, but this is also
+  # the string embedded verbatim into secrets.sops.yaml's yq/sops path
+  # (.machines["<username>"]) and into every JSON body below — the same
+  # conservative-subset reasoning as <name> and <role> above.
+  [[ "$username" =~ ^[A-Za-z0-9._-]+$ ]] \
+    || die "invalid username '${username}': letters, digits, dot, underscore, hyphen only"
+fi
+for _v in "$given_name" "$family_name" "$role_display_name" "$role_group" "$list_query" "$machine_display_name"; do
   [[ "$_v" == *'"'* || "$_v" == *'\'* ]] \
     && die "invalid value '${_v}': double quotes and backslashes are not allowed"
 done
@@ -386,7 +477,8 @@ ensure_project_id() {
 }
 
 case "$MODE" in
-  ensure|add-redirect|remove-redirect|list-redirects|app-add-role|app-list-roles|user-grant|user-revoke)
+  ensure|add-redirect|remove-redirect|list-redirects|app-add-role|app-list-roles|user-grant|user-revoke| \
+  machine-grant|machine-revoke)
     ensure_project_id ;;
 esac
 
@@ -494,6 +586,63 @@ require_user_id() {
   uid="$(resolve_user_id "$addr")"
   [[ -n "$uid" ]] || die "no Zitadel user with email '${addr}' — create one first: quarantine user add ${addr} --invite"
   printf '%s' "$uid"
+}
+
+# The machine counterpart to USER_PROJECTION — no email/givenName/familyName
+# (machine users don't have a human profile), display name comes from the
+# "name" field on the machine profile instead.
+MACHINE_PROJECTION='{
+  "userId": .userId,
+  "username": (.username // ""),
+  "displayName": (.machine.name // ""),
+  "description": (.machine.description // ""),
+  "state": (.state // "")
+}'
+
+# search_machines <extra_query_json> — POST /v2/users restricted to machine
+# users, the mirror image of search_users' TYPE_HUMAN filter. Same pagination
+# caveat as search_users: ask for the documented maximum and warn rather than
+# silently truncate.
+search_machines() {
+  local extra="${1:-}" body response total returned
+  if [[ -n "$extra" ]]; then
+    body="$(printf '{"queries":[{"typeQuery":{"type":"TYPE_MACHINE"}},%s],"query":{"limit":1000}}' "$extra")"
+  else
+    body="$(printf '{"queries":[{"typeQuery":{"type":"TYPE_MACHINE"}}],"query":{"limit":1000}}')"
+  fi
+  response="$(zitadel_call POST /v2/users "$body")" || die "failed to search Zitadel machine users"
+  total="$(printf '%s' "$response" | yq -p json '.details.totalResult // "0"')"
+  returned="$(printf '%s' "$response" | yq -p json '(.result // []) | length')"
+  if [[ "$total" =~ ^[0-9]+$ ]] && (( total > returned )); then
+    warn "Zitadel reported ${total} matching machine users but returned ${returned} — this listing is TRUNCATED"
+  fi
+  printf '%s' "$response"
+}
+
+# resolve_machine_id <username> — userId for a machine user with exactly this
+# username, or empty. A username is unique org-wide in Zitadel (it's also the
+# client_id), so this is as reliable a join key as email is for humans.
+resolve_machine_id() {
+  local uname="$1"
+  search_machines "$(printf '{"userNameQuery":{"userName":"%s","method":"TEXT_QUERY_METHOD_EQUALS"}}' "$uname")" \
+    | yq -p json '(.result // [])[0].userId // ""'
+}
+
+# require_machine_id <username> — resolve or die with an actionable message.
+require_machine_id() {
+  local uname="$1" mid
+  mid="$(resolve_machine_id "$uname")"
+  [[ -n "$mid" ]] || die "no Zitadel machine user named '${uname}' — create one first: quarantine machine add ${uname}"
+  printf '%s' "$mid"
+}
+
+# machine_secret_key <username> — the secrets.sops.yaml path a machine user's
+# client secret lives at. A function (not a plain variable) because every
+# machine-* mode that touches it needs the SAME username-dependent path, and
+# repeating the printf inline three times invites exactly the kind of typo
+# that would silently read/write the wrong key.
+machine_secret_key() {
+  printf '.machines["%s"].client_secret' "$1"
 }
 
 # smtp_configured — does this Zitadel instance have any SMTP provider at all?
@@ -784,6 +933,191 @@ if [[ "$MODE" == "user-grant" || "$MODE" == "user-revoke" ]]; then
       "$(printf '{"roleKeys":%s}' "$new_roles_json")" >/dev/null \
       || die "failed to update the grant for '${email}' on '${name}'"
     log "${MODE#user-}d '${role}' for ${email} on '${name}'"
+  fi
+  exit 0
+fi
+
+# =============================================================================
+# machine-list / machine-show — read-only, mirrors user-list/user-show.
+# =============================================================================
+if [[ "$MODE" == "machine-list" ]]; then
+  if [[ -n "$list_query" ]]; then
+    # displayNameQuery is user-list's own filter, copied here unverified: it
+    # matches a HUMAN profile's displayName in every confirmed-live example
+    # in this file, and whether it also matches a machine's "name" field
+    # (this mode's own MACHINE_PROJECTION.displayName) through the same
+    # /v2/users search is untested. Low-stakes if wrong — --query just
+    # returns nothing instead of the expected match; `machine list` with no
+    # --query is unaffected.
+    machines_response="$(search_machines "$(printf '{"displayNameQuery":{"displayName":"%s","method":"TEXT_QUERY_METHOD_CONTAINS_IGNORE_CASE"}}' "$list_query")")"
+  else
+    machines_response="$(search_machines)"
+  fi
+
+  if [[ "$want_json" == true ]]; then
+    printf '%s' "$machines_response" | yq -p json -o json \
+      "{\"machines\": [(.result // [])[] | ${MACHINE_PROJECTION}] | sort_by(.username)}"
+  else
+    printf '%s' "$machines_response" | yq -p json \
+      "[(.result // [])[] | ${MACHINE_PROJECTION}] | sort_by(.username) | .[]
+       | .username + \"\t\" + .state + \"\t\" + .displayName"
+  fi
+  exit 0
+fi
+
+if [[ "$MODE" == "machine-show" ]]; then
+  machines_response="$(search_machines "$(printf '{"userNameQuery":{"userName":"%s","method":"TEXT_QUERY_METHOD_EQUALS"}}' "$username")")"
+  found="$(printf '%s' "$machines_response" | yq -p json '(.result // []) | length')"
+  [[ "$found" != "0" ]] || die "no Zitadel machine user named '${username}'"
+
+  # Revealed here deliberately, not withheld like user-show's total silence
+  # on secrets: unlike a human, a machine user's own secret has nowhere else
+  # for an operator to look it up (Zitadel itself never returns it again
+  # after AddSecret) — this is the re-display path machine-add's own header
+  # comment promises. Anyone who can run this already has sops-decrypt
+  # access to the whole secrets.sops.yaml file, so this reveals nothing they
+  # couldn't already read directly.
+  client_secret="$(secrets_get "$plaintext_file" "$(machine_secret_key "$username")")"
+
+  if [[ "$want_json" == true ]]; then
+    # _json_escape_string, not a bare interpolation: unlike every other
+    # value spliced into a yq/jq expression string in this file (app
+    # names, roles — all gated to a safe charset above), a secret is
+    # arbitrary data with no charset guarantee, same reasoning as
+    # user-add's own password handling.
+    printf '%s' "$machines_response" | yq -p json -o json \
+      "{\"machine\": ((.result // [])[0] | ${MACHINE_PROJECTION} + {\"clientSecret\": \"$(_json_escape_string "$client_secret")\"})}"
+  else
+    printf '%s' "$machines_response" | yq -p json "(.result // [])[0] | ${MACHINE_PROJECTION} | to_entries | .[] | .key + \": \" + (.value | tostring)"
+    log "clientSecret: ${client_secret:-<none persisted — was this user created outside machine-add?>}"
+  fi
+  exit 0
+fi
+
+# =============================================================================
+# machine-add — idempotent by username. Existing-and-persisted heals and
+# exits 0, same "never overwrite a name from the Console" contract as
+# user-add. Existing-but-NOT-persisted (interrupted prior run — same shape as
+# the OIDC "ensure" mode's own defensive branch further down) regenerates a
+# secret rather than leaving a machine user nobody can ever authenticate as.
+# =============================================================================
+if [[ "$MODE" == "machine-add" ]]; then
+  existing_id="$(resolve_machine_id "$username")"
+  if [[ -n "$existing_id" ]]; then
+    existing_secret="$(secrets_get "$plaintext_file" "$(machine_secret_key "$username")")"
+    if [[ -n "$existing_secret" && "$existing_secret" != CHANGEME* ]]; then
+      log "Zitadel machine user '${username}' already exists (${existing_id}) with a persisted secret — nothing to do"
+      log "note: an existing profile is never overwritten here; change it in the Console"
+      exit 0
+    fi
+    log "Zitadel machine user '${username}' exists (${existing_id}) but has no persisted secret (interrupted prior run) — regenerating"
+    secret_response="$(zitadel_call POST "/v2/users/${existing_id}/secret" '{}')" \
+      || die "failed to generate a client secret for existing machine user '${username}'"
+    new_secret="$(printf '%s' "$secret_response" | yq -p json '.clientSecret // ""')"
+    [[ -n "$new_secret" ]] || die "AddSecret did not return a clientSecret: ${secret_response}"
+    secrets_set "$repo_root" "$env" "$(machine_secret_key "$username")" "$new_secret"
+    log "Zitadel machine user '${username}' ready — client_id=${username}"
+    warn "client_secret (shown once, now persisted to secrets.sops.yaml — retrieve again later with 'quarantine machine show ${username}'):"
+    warn "  ${new_secret}"
+    exit 0
+  fi
+
+  display_name="${machine_display_name:-$username}"
+  # accessTokenType: JWT, not the server default (BEARER, an opaque
+  # reference token) — Lazaretto's own forwarded-identity contract
+  # (docs/adding-oidc-to-your-app.md) already requires every first-party
+  # backend to verify a self-contained JWT against Zitadel's JWKS rather
+  # than call back into Zitadel to introspect an opaque token; a machine
+  # user calling that same API should carry the same kind of token.
+  create_body="$(printf '{"organizationId":"%s","username":"%s","machine":{"name":"%s","description":"quarantine-managed automation account","accessTokenType":"ACCESS_TOKEN_TYPE_JWT"}}' \
+    "$org_id" "$username" "$display_name")"
+  create_response="$(zitadel_call POST /v2/users/new "$create_body")" \
+    || die "failed to create Zitadel machine user '${username}'"
+  unset create_body
+
+  # Sources disagreed on the response field name for this newer, unified
+  # CreateUser endpoint (some examples show "userId", others "id") — see
+  # this file's own header comment on why this mode is unconfirmed against a
+  # live instance. Checking both rather than guessing wrong and dying on a
+  # confusing "userId did not return" message when the value was right there
+  # under the other name.
+  new_machine_id="$(printf '%s' "$create_response" | yq -p json '.userId // .id // ""')"
+  [[ -n "$new_machine_id" ]] || die "CreateUser did not return a userId (checked both 'userId' and 'id'): ${create_response}"
+  log "created Zitadel machine user '${username}' (${new_machine_id})"
+
+  secret_response="$(zitadel_call POST "/v2/users/${new_machine_id}/secret" '{}')" \
+    || die "created machine user '${username}' but failed to generate its client secret — retry with: provisioners/zitadel.sh machine-add ... ${username} (idempotent: will heal, not duplicate)"
+  new_secret="$(printf '%s' "$secret_response" | yq -p json '.clientSecret // ""')"
+  [[ -n "$new_secret" ]] || die "AddSecret did not return a clientSecret: ${secret_response}"
+  secrets_set "$repo_root" "$env" "$(machine_secret_key "$username")" "$new_secret"
+
+  log "Zitadel machine user '${username}' ready — client_id=${username}"
+  warn "client_secret (shown once, now persisted to secrets.sops.yaml — retrieve again later with 'quarantine machine show ${username}'):"
+  warn "  ${new_secret}"
+  exit 0
+fi
+
+if [[ "$MODE" == "machine-remove" ]]; then
+  machine_id="$(resolve_machine_id "$username")"
+  if [[ -z "$machine_id" ]]; then
+    log "no Zitadel machine user named '${username}' — nothing to do"
+    exit 0
+  fi
+  zitadel_call DELETE "/v2/users/${machine_id}" >/dev/null \
+    || die "failed to delete Zitadel machine user '${username}' (${machine_id})"
+  log "deleted Zitadel machine user '${username}' (${machine_id})"
+  log "note: this removes the IDENTITY only. secrets.sops.yaml still carries its now-orphaned client secret at $(machine_secret_key "$username") — harmless (nothing can authenticate as a deleted user) but worth cleaning up by hand if this environment is ever restored from this file."
+  exit 0
+fi
+
+# =============================================================================
+# machine-grant / machine-revoke — project-role grants, mirroring
+# user-grant/user-revoke's own read-modify-write EXACTLY (a UserGrant is
+# keyed on userId regardless of whether that user is human or machine) —
+# duplicated rather than factored out into a shared helper so this new,
+# not-yet-live-verified path can never regress the already-working human one.
+# =============================================================================
+if [[ "$MODE" == "machine-grant" || "$MODE" == "machine-revoke" ]]; then
+  user_id="$(require_machine_id "$username")"
+
+  roles_response="$(zitadel_call POST "/management/v1/projects/${project_id}/roles/_search" '{"query":{"limit":1000}}')" \
+    || die "failed to list roles on project '${PROJECT_NAME}'"
+  if ! printf '%s' "$roles_response" | yq -p json '(.result // [])[].key' | grep -qxF "$role"; then
+    die "role '${role}' does not exist on project '${PROJECT_NAME}' — create it first: quarantine app add-role ${name} ${role}"
+  fi
+
+  grants_response="$(zitadel_call POST /management/v1/users/grants/_search \
+    "$(printf '{"query":{"limit":1000},"queries":[{"userIdQuery":{"userId":"%s"}},{"projectIdQuery":{"projectId":"%s"}}]}' "$user_id" "$project_id")")" \
+    || die "failed to search existing grants for '${username}'"
+  grant_id="$(printf '%s' "$grants_response" | yq -p json '(.result // [])[0].id // ""')"
+  current_roles_json="$(printf '%s' "$grants_response" | yq -p json -o json '(.result // [])[0].roleKeys // []')"
+
+  if [[ "$MODE" == "machine-grant" ]]; then
+    new_roles_json="$(printf '%s' "$current_roles_json" | yq -p json -o json ". + [\"${role}\"] | unique" -)"
+  else
+    new_roles_json="$(printf '%s' "$current_roles_json" | yq -p json -o json "[.[] | select(. != \"${role}\")]" -)"
+  fi
+
+  if [[ "$new_roles_json" == "$current_roles_json" ]]; then
+    log "${MODE}: '${username}' already matches the desired roles on '${name}' — nothing to do"
+    exit 0
+  fi
+
+  new_role_count="$(printf '%s' "$new_roles_json" | yq -p json 'length')"
+  if [[ -z "$grant_id" ]]; then
+    zitadel_call POST "/management/v1/users/${user_id}/grants" \
+      "$(printf '{"projectId":"%s","roleKeys":%s}' "$project_id" "$new_roles_json")" >/dev/null \
+      || die "failed to create a grant for '${username}' on '${name}'"
+    log "granted '${role}' to ${username} on '${name}'"
+  elif (( new_role_count == 0 )); then
+    zitadel_call DELETE "/management/v1/users/${user_id}/grants/${grant_id}" >/dev/null \
+      || die "failed to delete the now-empty grant for '${username}'"
+    log "revoked '${role}' from ${username} — that was the last role, so the grant itself was removed"
+  else
+    zitadel_call PUT "/management/v1/users/${user_id}/grants/${grant_id}" \
+      "$(printf '{"roleKeys":%s}' "$new_roles_json")" >/dev/null \
+      || die "failed to update the grant for '${username}' on '${name}'"
+    log "${MODE#machine-}d '${role}' for ${username} on '${name}'"
   fi
   exit 0
 fi
