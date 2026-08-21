@@ -1117,7 +1117,16 @@ if [[ "$MODE" == "machine-grant" || "$MODE" == "machine-revoke" ]]; then
     zitadel_call PUT "/management/v1/users/${user_id}/grants/${grant_id}" \
       "$(printf '{"roleKeys":%s}' "$new_roles_json")" >/dev/null \
       || die "failed to update the grant for '${username}' on '${name}'"
-    log "${MODE#machine-}d '${role}' for ${username} on '${name}'"
+    # Not "${MODE#machine-}d" (that reads "machine-grant" -> "grant" + "d" =
+    # "grantd", a real bug already present in user-grant/user-revoke's own
+    # identical shorthand below — not fixed there in this PR to avoid
+    # touching that already-live-verified path, but not worth repeating in
+    # new code either).
+    if [[ "$MODE" == "machine-grant" ]]; then
+      log "granted '${role}' for ${username} on '${name}'"
+    else
+      log "revoked '${role}' for ${username} on '${name}'"
+    fi
   fi
   exit 0
 fi
