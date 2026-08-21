@@ -1093,7 +1093,17 @@ cmd_machine_onboard() {
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --grant) app="${2:?--grant requires <app> <role>}"; role="${3:?--grant requires <app> <role>}"; shift 3 ;;
+      --grant)
+        app="${2:?--grant requires <app> <role>}"
+        role="${3:?--grant requires <app> <role>}"
+        # A dropped role (`--grant n8n --display-name ...`) would otherwise
+        # let the NEXT flag fill $3 silently, passing this check and only
+        # failing after machine-add has already created the Zitadel user
+        # and persisted its client secret. Catch it here, before anything
+        # runs.
+        [[ "$app" != -* && "$role" != -* ]] \
+          || die "--grant requires <app> <role> as its next two arguments, not a flag: got '${app}' '${role}'"
+        shift 3 ;;
       --display-name) display_name="${2:?--display-name requires a value}"; shift 2 ;;
       *) die "unknown argument to machine onboard: $1" ;;
     esac
