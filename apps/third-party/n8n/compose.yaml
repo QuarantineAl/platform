@@ -113,7 +113,11 @@ services:
       # External webhook base — n8n bakes this into every generated webhook
       # URL it shows in the editor, even though Traefik/oauth2-proxy sit in
       # front of it. Trailing slash matters (n8n's own docs show it).
-      WEBHOOK_URL: https://n8n.${DOMAIN}/
+      # N8N_WEBHOOK_URL, not the bare WEBHOOK_URL: confirmed live (2026-08-21,
+      # n8n 2.34.1 on dev) — n8n logs WEBHOOK_URL as deprecated in favor of
+      # this name at every startup ("Use N8N_WEBHOOK_URL instead, which sets
+      # the base URL for both test and production webhooks").
+      N8N_WEBHOOK_URL: https://n8n.${DOMAIN}/
 
       GENERIC_TIMEZONE: Europe/Tirane
       TZ: Europe/Tirane
