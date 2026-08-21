@@ -10,7 +10,7 @@ platform's provisioners entirely (Lazaretto's own headless-API contract).
 Do them in this order, after the first `quarantine start` that brings n8n
 up healthy.
 
-## 1. Zitadel: role for Lazaretto's headless API
+## 1. Zitadel: role + machine user for Lazaretto's headless API
 
 Corrects an assumption worth naming: this platform has **one shared
 Zitadel project** (`quarantine-apps`, see `provisioners/zitadel.sh`'s own
@@ -19,35 +19,46 @@ really added to that one shared project — every app's OIDC client in it can
 request it via the `urn:zitadel:iam:org:projects:roles` scope already
 listed in `docs/adding-oidc-to-your-app.md`.
 
-Defining the role itself is NOT a console step — `quarantine app add-role`
-is an existing idempotent CLI command that wraps `provisioners/zitadel.sh
-app-add-role` (create-or-no-op, safe to re-run):
+Also corrects the earlier version of this doc, which pointed at the Zitadel
+Console for the machine user itself: `quarantine machine onboard` now does
+the whole thing — role, machine user, client secret, and the grant — in one
+idempotent, re-runnable command (`provisioners/zitadel.sh`'s new
+`machine-*` modes; **not** a Project Application — see that file's own
+header for why a machine user alone is the correct primitive here):
 
 ```bash
 ./bin/quarantine app add-role n8n agent:invoke \
   --display-name "Invoke Lazaretto headless tasks"
+
+./bin/quarantine machine onboard n8n-automation \
+  --grant n8n agent:invoke \
+  --display-name "n8n workflow automation"
 ```
 
-(The `n8n` argument is only used for the command's own usage/logging —
-`app-add-role` writes to the one shared project regardless of which
-catalog app name is passed. Confirmed by reading `provisioners/zitadel.sh`
-directly: `app-add-role`'s role-write path never references its
-`<canonical_name>` argument.)
+(The `n8n` argument to both commands is only used for usage/logging and for
+`_require_oidc_app`'s sanity check that `n8n` is a real `needs_oidc`
+catalog app — the role itself always lives on the one shared project,
+regardless of which catalog app name is passed.)
 
-What still has no CLI and must be done in the Zitadel Console
-(`https://auth.${DOMAIN}/ui/v2/login` → Console), because
-`provisioners/zitadel.sh`'s `user-*` modes are explicitly for human,
-email-identified accounts (its own header: "Human identity management"),
-not machine/service accounts:
+The client secret is shown exactly once, at creation — copy it immediately
+for step 4 below. If you lose it before pasting it into n8n, it's still
+retrievable (without regenerating, which would break any credential
+already configured with the old one):
 
-1. Console → Users → **Service Users** → create a new machine user named
-   `n8n-automation`, auth method **Client Credentials** (Basic Auth or
-   Client Secret Basic, not JWT).
-2. Generate a client secret for it — copy it immediately, Zitadel shows it
-   exactly once.
-3. Grant it the `agent:invoke` role on the shared `quarantine-apps` project
-   (Console → Projects → quarantine-apps → Authorizations → grant to the
-   `n8n-automation` service user).
+```bash
+./bin/quarantine machine show n8n-automation
+```
+
+**This machine-user automation is new and, as of this writing, unconfirmed
+against a live Zitadel instance** (every other API call in
+`provisioners/zitadel.sh` was fixed at least once after disagreeing with
+its own documentation, once tried live — see that file's own header). If
+`machine onboard` fails outright, `provisioners/zitadel.sh`'s header
+comment on its `machine-*` modes names exactly which parts are uncertain
+(the create-user endpoint path and response field); fall back to the
+Zitadel Console's own Service Users screen for this one onboarding if it
+doesn't resolve quickly, and please fix the script once you know what was
+wrong.
 
 ## 2. Zitadel / oauth2-proxy: nothing to do here
 
@@ -78,7 +89,9 @@ type supporting the client-credentials grant):
 
 - Grant Type: Client Credentials
 - Access Token URL: `https://auth.${DOMAIN}/oauth/v2/token`
-- Client ID / Client Secret: from step 1
+- Client ID: `n8n-automation` (a machine user's username IS its client_id)
+- Client Secret: from step 1's `machine onboard` output, or
+  `./bin/quarantine machine show n8n-automation`
 - Scope: at minimum whatever Lazaretto's headless API documents as required
   for `agent:invoke` (see step 5)
 
