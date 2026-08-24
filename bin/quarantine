@@ -582,6 +582,7 @@ generate_env_file() {
   local zitadel_masterkey zitadel_admin_password zitadel_db_password
   local oauth2_cookie_secret
   local github_runner_pat
+  local zitadel_project_id
 
   cf_token="$(req_secret "$plaintext" '.core.traefik.cloudflare_api_token' 'Cloudflare API token')"
   pg_admin_password="$(req_secret "$plaintext" '.core.postgres.admin_password' 'Postgres admin password')"
@@ -595,6 +596,15 @@ generate_env_file() {
   # secrets.example.yaml's own comment on core.github_runner.pat for why
   # this isn't in REQUIRED_SECRET_KEYS.
   github_runner_pat="$(secrets_get "$plaintext" '.core.github_runner.pat')"
+
+  # The shared `quarantine-apps` Zitadel project's id. Not a secret -- it
+  # rides in every client-credentials token's `aud` claim -- but this is the
+  # per-environment value store the .env writer already reads, and the id is
+  # environment-specific (each environment has its own Zitadel). Legitimately
+  # empty: nothing needs it until an app verifies machine tokens, so read it
+  # directly rather than via req_secret. Consumed by lazaretto's headless
+  # tasks API as ZITADEL_AUDIENCE (apps/first-party/lazaretto/compose.yaml).
+  zitadel_project_id="$(secrets_get "$plaintext" '.core.zitadel.project_id')"
 
   {
     printf 'DOMAIN=%s\n' "$DOMAIN"
@@ -610,6 +620,8 @@ generate_env_file() {
     # secrets_edit) could hold one with a DSN delimiter character (@, :, /,
     # #) that would otherwise be misparsed as part of the URI structure.
     printf 'ZITADEL_DATABASE_POSTGRES_DSN=postgresql://zitadel:%s@postgres:5432/zitadel?sslmode=disable\n' "$(urlencode "$zitadel_db_password")"
+
+    printf 'ZITADEL_PROJECT_ID=%s\n' "$zitadel_project_id"
 
     printf 'OAUTH2_PROXY_COOKIE_SECRET=%s\n' "$oauth2_cookie_secret"
 
