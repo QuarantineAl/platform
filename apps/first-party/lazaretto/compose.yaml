@@ -174,12 +174,25 @@ services:
       # callback_url.
       CALLBACK_STATIC_SECRET: ${CALLBACK_STATIC_SECRET_N8N:-}
       # Full URL prefixes, comma separated, matched scheme+host exactly then
-      # path-prefix. Scoped to the Wait-node resume path specifically, not the
-      # whole n8n host: lazaretto only ever calls back to resume a waiting
-      # execution, and the container-internal address is deliberate -- that
-      # delivery goes over the `edge` Docker network and never through
-      # Traefik or n8n.${DOMAIN} (apps/third-party/n8n/SETUP.md).
-      HEADLESS_CALLBACK_ALLOWLIST: http://quarantine-n8n:5678/webhook-waiting/
+      # path-prefix. The container-internal address is deliberate and applies
+      # to every entry -- delivery goes over the `edge` Docker network and
+      # never through Traefik or n8n.${DOMAIN} (apps/third-party/n8n/SETUP.md).
+      #
+      # Three paths, not just the Wait-node resume one. `/webhook-waiting/` is
+      # the shape a finished production workflow uses (Wait node, "On Webhook
+      # Call"). `/webhook/` and `/webhook-test/` are what a plain Webhook node
+      # answers on -- the test variant is how a workflow is actually built and
+      # debugged in the editor, and without it every iteration has to be
+      # restructured around a Wait node before it can be tried even once.
+      # These are the same three prefixes n8n's own `n8n-public` Traefik
+      # router already exposes without SSO (apps/third-party/n8n/compose.yaml),
+      # so this grants lazaretto no reach it did not already have -- it just
+      # keeps the call on the internal network.
+      #
+      # Still an allowlist, not a wildcard: scheme+host+port must match
+      # exactly, so only n8n's own container can be a callback target, and
+      # only on these paths.
+      HEADLESS_CALLBACK_ALLOWLIST: http://quarantine-n8n:5678/webhook-waiting/,http://quarantine-n8n:5678/webhook/,http://quarantine-n8n:5678/webhook-test/
     healthcheck:
       # 127.0.0.1, not localhost: this image's /etc/hosts resolves
       # "localhost" to ::1 as well as 127.0.0.1, and wget tries that first —
