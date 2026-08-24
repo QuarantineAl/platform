@@ -195,6 +195,33 @@ services:
       - traefik.http.routers.${SUBDOMAIN:-lazaretto}-api-preflight.priority=200
       - traefik.http.routers.${SUBDOMAIN:-lazaretto}-api-preflight.service=${SUBDOMAIN:-lazaretto}-backend
 
+      # Headless machine API bypass: /api/v1/tasks* is authenticated by the
+      # backend's own HeadlessAuthMiddleware -- a Zitadel machine JWT with
+      # `aud` pinned to OIDC_CLIENT_ID_LAZARETTO plus a required role -- and
+      # not by a browser SSO session. forwardAuth gates the routers above
+      # wholesale and expects a session cookie, so n8n's client-credentials
+      # bearer token gets oauth2-errors' 401->302 to /oauth2/sign_in and
+      # never reaches the backend at all: the API is silently unreachable
+      # rather than failing loudly. lazaretto's own docs/headless-api.md
+      # names exactly this as the deployment prerequisite that has to be
+      # satisfied here, in this repo, because that repo cannot reach it.
+      #
+      # Same shape as the preflight router above -- match, skip both oauth2
+      # middlewares, straight to the backend service. Priority above that
+      # router's 200 so this path's OPTIONS preflight lands here too; the
+      # backend's own app.enableCors() answers it, and splitting one path
+      # across two routers would buy nothing.
+      #
+      # This removes the edge auth layer for this path and only this path,
+      # leaving HeadlessAuthMiddleware as the sole gate -- the posture
+      # docs/headless-api.md documents as the default trusted-network shape.
+      # Every other route on this host, and the frontend, keep forwardAuth.
+      - traefik.http.routers.${SUBDOMAIN:-lazaretto}-api-headless.rule=Host(`${SUBDOMAIN:-lazaretto}-api.${DOMAIN}`) && PathPrefix(`/api/v1/tasks`)
+      - traefik.http.routers.${SUBDOMAIN:-lazaretto}-api-headless.entrypoints=websecure
+      - traefik.http.routers.${SUBDOMAIN:-lazaretto}-api-headless.tls=true
+      - traefik.http.routers.${SUBDOMAIN:-lazaretto}-api-headless.priority=250
+      - traefik.http.routers.${SUBDOMAIN:-lazaretto}-api-headless.service=${SUBDOMAIN:-lazaretto}-backend
+
       # Auth failures on a browser fetch must stay CORS-readable.
       #
       # The preflight router above fixed OPTIONS. The *authenticated* GET is
