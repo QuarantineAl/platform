@@ -494,24 +494,34 @@ cmd_start() {
   # — see that fragment's own comment), never by a toggle here. Checking the
   # assembled service list is what actually reflects that.
   #
-  # QUARANTINE_SKIP_RUNNER opts out of touching the runner service at all.
-  # Set by this repo's own .github/workflows/deploy-platform.yml, which is
-  # the one workflow that calls `quarantine start` FROM INSIDE a job running
-  # on this very runner pool. (It previously said the reusable app-deploy
-  # workflow sets it; that stopped being true when deploy-app.yml was
-  # rewritten to use a directly-scoped `docker compose up` instead, which
-  # never touches the runner service and so needs no opt-out.) The hazard:
-  # `up -d runner` recreating that container mid-job kills the job that's
-  # doing the recreating (confirmed empirically — a live job got
-  # "The operation was canceled" when its own container got torn down and
-  # replaced out from under it). A human operator running `quarantine
-  # start` directly on the host has no such self-reference problem and
-  # still gets the runner pool reconciled normally.
+  # Matches `runner` AND any `runner-<suffix>` service (e.g.
+  # runner-platform-deploy, a second isolated instance for this repo's own
+  # deploy-platform.yml — see infra/ci/github-runner/compose.yaml's own
+  # comment on why a second runner pool exists at all), not just the one
+  # literal name: the same "assembled service list decides, not a hardcoded
+  # name" reasoning above applies equally to every runner-shaped service
+  # here, and a second one silently never starting because this only ever
+  # checked for exactly "runner" would be exactly the kind of drift that
+  # reasoning exists to prevent.
+  #
+  # QUARANTINE_SKIP_RUNNER opts out of touching ANY runner service. Set by
+  # this repo's own .github/workflows/deploy-platform.yml, which is the one
+  # workflow that calls `quarantine start` FROM INSIDE a job running on one
+  # of these very runner pools. The hazard: `up -d` recreating the
+  # container mid-job kills the job that's doing the recreating (confirmed
+  # empirically — a live job got "The operation was canceled" when its own
+  # container got torn down and replaced out from under it). A human
+  # operator running `quarantine start` directly on the host has no such
+  # self-reference problem and still gets every runner pool reconciled
+  # normally.
   if [[ "${QUARANTINE_SKIP_RUNNER:-false}" == "true" ]]; then
     log "skipping ci runner pool reconciliation (QUARANTINE_SKIP_RUNNER=true)"
-  elif qcompose "$env" config --services 2>/dev/null | grep -qx 'runner'; then
-    log "starting ci runner pool"
-    qcompose "$env" up -d runner
+  else
+    local runner_service
+    for runner_service in $(qcompose "$env" config --services 2>/dev/null | grep -E '^runner(-.*)?$'); do
+      log "starting ci runner pool: ${runner_service}"
+      qcompose "$env" up -d "$runner_service"
+    done
   fi
 
   ensure_ghcr_login "$plaintext"
