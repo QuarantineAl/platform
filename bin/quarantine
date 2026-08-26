@@ -808,7 +808,36 @@ reconcile_apps() {
       profile_args+=(--profile "$p")
     done
     log "starting apps: ${active_profiles[*]}"
-    qcompose "$env" "${profile_args[@]}" up -d
+    # `--profile ... up -d` with no service arguments resolves its scope as
+    # "every unprofiled always-on service PLUS the active profiles'
+    # services" -- the exact same Compose behavior the stop path below
+    # already has to work around with an explicit service list, and for
+    # the same reason: `runner`/`runner-<suffix>` (see
+    # infra/ci/github-runner/compose.yaml) carry no profile of their own,
+    # so a bare `up -d` here recreates them as a side effect regardless of
+    # QUARANTINE_SKIP_RUNNER, which only ever guarded the OTHER call site
+    # (the dedicated runner-pool loop above). Confirmed live: a
+    # deploy-platform.yml job reached this exact line, recreated the very
+    # runner-platform-deploy container it was executing on, and was killed
+    # mid-run with "Canceled" -- the identical hazard QUARANTINE_SKIP_RUNNER
+    # was written to prevent, just reached through this call site instead.
+    #
+    # So: build the same set Compose would have picked implicitly, minus
+    # any runner-shaped service when QUARANTINE_SKIP_RUNNER=true, and pass
+    # it explicitly. Omitted (not just `--profile ... up -d` with no
+    # filtering) is the only way to keep this recreating every other
+    # unprofiled service (traefik, postgres, zitadel, oauth2-proxy
+    # instances) exactly as before while actually excluding the runner(s).
+    local -a up_services=()
+    local svc_line
+    while IFS= read -r svc_line; do
+      [[ -z "$svc_line" ]] && continue
+      if [[ "${QUARANTINE_SKIP_RUNNER:-false}" == "true" && "$svc_line" =~ ^runner(-.*)?$ ]]; then
+        continue
+      fi
+      up_services+=("$svc_line")
+    done < <(qcompose "$env" "${profile_args[@]}" config --services 2>/dev/null)
+    qcompose "$env" "${profile_args[@]}" up -d "${up_services[@]}"
   fi
 
   # Captured via a direct command substitution (checked with `||` right
