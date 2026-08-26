@@ -82,3 +82,57 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - /srv/quarantine-runner-work:/srv/quarantine-runner-work
       - /opt/quarantine:/opt/quarantine
+
+  # Second, isolated instance of the exact same image, for exactly one
+  # caller: this repo's own .github/workflows/deploy-platform.yml. That
+  # workflow runs directly (not as a QuarantineAl/.github reusable
+  # workflow), so unlike every app's deploy — evaluated against the
+  # CALLING repo, which is private for every app here — its self-hosted
+  # eligibility is evaluated against THIS repo, which is public. GitHub
+  # refuses to dispatch a public repo's job to a runner group unless that
+  # group opts in via allows_public_repositories, and the shared
+  # `first-party` group above deliberately does not (it is visibility=all,
+  # so opting it in would hand every current AND FUTURE public repo in the
+  # org runner access, not just this one repo's own trusted push-to-main
+  # trigger) — confirmed live: deploy-platform.yml's job sat `queued`
+  # forever against an online, idle, correctly-labeled `first-party`
+  # runner, because GitHub never offered it the job at all.
+  #
+  # Fixed with a dedicated `platform-deploy` runner group instead of
+  # loosening `first-party`: visibility=selected, listing ONLY this repo,
+  # allows_public_repositories=true (see docs/adding-an-app.md's org setup
+  # notes, or `gh api orgs/QuarantineAl/actions/runner-groups`). A runner
+  # can only ever belong to ONE group, so this had to be a genuinely
+  # separate runner, not a re-group of the shared one above — moving the
+  # shared runner into `platform-deploy` would have taken it (and every
+  # app deploy that depends on it) out of `first-party` entirely.
+  #
+  # Same LABELS var as the shared runner on purpose: deploy-platform.yml
+  # requests plain `quarantine-dev`/`quarantine-prod`, identical to every
+  # app's own deploy, and label-matching alone can't distinguish this
+  # runner from the shared one — only group membership does that, which is
+  # exactly why `platform-deploy`'s repo allowlist (this repo only) is the
+  # thing actually keeping the two pools from overlapping in practice.
+  #
+  # Own RUNNER_WORKDIR: never share a bind-mounted work directory between
+  # two runner containers that could end up scheduled concurrently on the
+  # same host — same reasoning as every other per-instance path in this
+  # repo (see e.g. oauth2-proxy/compose.yaml's own container_name comment).
+  runner-platform-deploy:
+    image: myoung34/github-runner:latest
+    restart: always
+    environment:
+      RUNNER_SCOPE: ${RUNNER_SCOPE:-org}
+      ORG_NAME: ${ORG_NAME:-QuarantineAl}
+      REPO_URL: ${REPO_URL:-}
+      ACCESS_TOKEN: ${GH_RUNNER_PAT:-}
+      RUNNER_TOKEN: ${RUNNER_TOKEN:-}
+      RUNNER_GROUP: platform-deploy
+      LABELS: ${RUNNER_LABELS:-self-hosted,quarantine-dev}
+      RUNNER_WORKDIR: /srv/quarantine-runner-platform-deploy-work
+      EPHEMERAL: "true"
+      DISABLE_AUTO_UPDATE: "true"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /srv/quarantine-runner-platform-deploy-work:/srv/quarantine-runner-platform-deploy-work
+      - /opt/quarantine:/opt/quarantine
