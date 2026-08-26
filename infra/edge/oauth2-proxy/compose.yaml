@@ -375,6 +375,55 @@ services:
       - traefik.http.routers.oauth2-proxy-${SUBDOMAIN:-lazaretto}.priority=100
       - traefik.http.routers.oauth2-proxy-${SUBDOMAIN:-lazaretto}.service=oauth2-proxy-${SUBDOMAIN:-lazaretto}
 
+      # Prefetch/speculative-fetch guard: Chrome's page-preloading and
+      # Google's user-triggered "Read Aloud" fetcher
+      # (developers.google.com/crawling/docs/crawlers-fetchers/
+      # read-aloud-user-agent — a real fetcher, but "triggered by a user
+      # request", i.e. it can fire on whatever URL is on screen, including a
+      # mid-flight OAuth redirect) independently re-fetch /oauth2/callback
+      # ?code=...&state=... in the background while the browser's own
+      # top-level navigation to that same URL is still in flight. An
+      # authorization code is single-use: whichever of the two requests
+      # reaches oauth2-proxy first redeems it, and the other gets a bare
+      # 403 — which bounces back through /oauth2/sign_in, mints a NEW code,
+      # and races again. Observed live on a PR sandbox (Android Chrome):
+      # AuthFailure "No cookies were found in OAuth callback" / "cookie
+      # signature not valid" logged in pairs, one request per UA, same
+      # code+state, milliseconds apart — the user saw it as an unbreakable
+      # "too many redirects" loop.
+      #
+      # Fixed at the edge, not in oauth2-proxy (no upstream option exists to
+      # opt a route out of code redemption by request purpose): a
+      # higher-priority router intercepts anything hitting /oauth2/callback
+      # that self-identifies as a prefetch —
+      #   - Sec-Purpose: prefetch[...] — Chrome's own standardized signal
+      #     for NoState Prefetch / the Private Prefetch Proxy
+      #     (developer.chrome.com/blog/private-prefetch-proxy; blink-dev
+      #     Intent-to-Ship "Sec-Purpose: prefetch" header)
+      #   - User-Agent containing Google-Read-Aloud — belt-and-suspenders
+      #     for the specific fetcher observed live, which is not guaranteed
+      #     to send Sec-Purpose
+      # — and routes it to noop@internal (a real Traefik-internal service;
+      # see traefik/compose.yaml's own use of `service=api@internal` for
+      # the same @internal-reference pattern) instead of oauth2-proxy, so
+      # the code is never touched. noop@internal always answers 418 (its
+      # fixed, non-configurable response — traefik/traefik#9759): harmless
+      # here, since nothing legitimate is ever supposed to see this
+      # response — the real top-level navigation carries neither header and
+      # reaches the ordinary router above, unaffected.
+      #
+      # Path (exact), not PathPrefix: scoped to the one endpoint where a
+      # prefetch actually burns something single-use. /oauth2/auth and
+      # /oauth2/sign_in are idempotent-enough to prefetch harmlessly (worst
+      # case, one extra CSRF cookie against the CSRF_PER_REQUEST_LIMIT
+      # above), so staying narrow keeps this guard's blast radius to
+      # exactly the failure mode it was written for.
+      - traefik.http.routers.oauth2-callback-prefetch-guard-${SUBDOMAIN:-lazaretto}.rule=Host(`${SUBDOMAIN:-lazaretto}.${DOMAIN}`) && Path(`/oauth2/callback`) && (HeaderRegexp(`Sec-Purpose`, `(?i)prefetch`) || HeaderRegexp(`User-Agent`, `Google-Read-Aloud`))
+      - traefik.http.routers.oauth2-callback-prefetch-guard-${SUBDOMAIN:-lazaretto}.entrypoints=websecure
+      - traefik.http.routers.oauth2-callback-prefetch-guard-${SUBDOMAIN:-lazaretto}.tls=true
+      - traefik.http.routers.oauth2-callback-prefetch-guard-${SUBDOMAIN:-lazaretto}.priority=200
+      - traefik.http.routers.oauth2-callback-prefetch-guard-${SUBDOMAIN:-lazaretto}.service=noop@internal
+
       # Addressed by container_name, not the (necessarily static)
       # oauth2-proxy-lazaretto service key — see the file header.
       - traefik.http.middlewares.oauth2-auth-${SUBDOMAIN:-lazaretto}.forwardauth.address=http://quarantine-oauth2-proxy-${SUBDOMAIN:-lazaretto}:4180/oauth2/auth
