@@ -251,6 +251,22 @@ apps:
       pr-sandbox-*.yml, which assume a two-image app shape. QuarantineAl/
       qualitech has no main branch and no prod environment yet — dev only.
 
+  - name: residences
+    kind: app
+    compose_path: apps/first-party/residences/compose.yaml
+    subdomain: residences
+    needs_db: false
+    needs_oidc: false
+    notes: >-
+      Interactive property-explorer site (Vite/React build, no
+      server-only features) served by nginx — a single container, same
+      shape as qualitech. Built by its own repo's GitHub Actions
+      workflow rather than QuarantineAl/.github's reusable
+      deploy-app.yml, which assumes a two-image app shape. Dev only for
+      now: QuarantineAl/Residences has a main branch (unlike qualitech)
+      but no deploy workflow for it yet, only a develop -> dev-
+      environment path.
+
   - name: searxng
     kind: app
     compose_path: apps/third-party/searxng/compose.yaml
