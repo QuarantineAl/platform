@@ -1,0 +1,36 @@
+# apps/first-party/residences/compose.yaml — ${SUBDOMAIN:-residences}.${DOMAIN}
+# (catalog.yaml: residences)
+#
+# Single-container interactive property-explorer site: a Vite/React build
+# served by nginx — same shape as qualitech (static build, one container,
+# no database, no OIDC, no persistent data).
+#
+# SUBDOMAIN defaults to "residences" for the persistent catalog deployment
+# (quarantine app add residences / quarantine start) but is overridden per
+# invocation for a PR sandbox, same convention as qualitech/lazaretto.
+
+services:
+  residences:
+    image: ghcr.io/quarantineal/residences:${RESIDENCES_VERSION:-CHANGEME}
+    container_name: quarantine-${SUBDOMAIN:-residences}
+    restart: unless-stopped
+    profiles: [residences]
+    networks:
+      - edge
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:80/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    labels:
+      - traefik.enable=true
+      - traefik.http.services.${SUBDOMAIN:-residences}.loadbalancer.server.port=80
+      - traefik.http.routers.${SUBDOMAIN:-residences}.rule=Host(`${SUBDOMAIN:-residences}.${DOMAIN}`)
+      - traefik.http.routers.${SUBDOMAIN:-residences}.entrypoints=websecure
+      - traefik.http.routers.${SUBDOMAIN:-residences}.tls=true
+      - traefik.http.routers.${SUBDOMAIN:-residences}.service=${SUBDOMAIN:-residences}
+
+networks:
+  edge:
+    external: true
