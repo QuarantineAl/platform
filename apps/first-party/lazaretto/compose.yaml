@@ -95,6 +95,21 @@ services:
     # down with it. Generous next to real usage — a prod container running two
     # turns, two interactive terminals and a full npm test peaked at 129 pids.
     pids_limit: ${LAZARETTO_PIDS_LIMIT:-1024}
+    # backend/src/cli-agents/cli-runtime.service.ts spawns every turn with
+    # detached:true (its own process group, deliberately, so killTree() can
+    # signal the whole tree). `node dist/main` runs as bare PID 1 here with
+    # no init, and PID 1 only auto-reaps ITS OWN direct children -- never
+    # grandchildren reparented to it (a turn's MCP servers, ptys, chromium,
+    # dev servers) once their immediate parent exits or is killed. Those
+    # accumulate as permanent zombies instead. Confirmed live on qualitech:
+    # 361 zombies / 385 pids after one afternoon of ordinary turns, no OOM
+    # involved (memory.events oom_kill was 0 throughout).
+    #
+    # `init: true` inserts the Docker Engine's built-in tini as the real
+    # PID 1; it reaps any orphan regardless of process group, so it doesn't
+    # change killTree()'s or oom_score_adj's behavior above -- it just adds
+    # the missing wait() loop nothing else here was doing.
+    init: true
     environment:
       FRONTEND_ORIGIN: https://${SUBDOMAIN:-lazaretto}.${DOMAIN}
       # backend/src/mcp-servers/mcp-oauth-config.ts. This backend's own
