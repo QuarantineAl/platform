@@ -31,8 +31,8 @@ it's also PR-sandboxed (per-PR preview deployments, see
 
 | | Single-origin | Multi-origin |
 |---|---|---|
-| **Never PR-sandboxed** | Uptime Kuma: one hostname, one instance, simplest case | (no example yet — would follow Lazaretto's cookie-domain handling, skip its SUBDOMAIN-templating) |
-| **PR-sandboxed** | (no example yet — would follow Lazaretto's SUBDOMAIN-templating, skip its cookie-domain handling) | Lazaretto: frontend + API on sibling subdomains, one instance per open PR sandbox plus the persistent deployment |
+| **Never PR-sandboxed** | Uptime Kuma: one hostname, one instance, simplest case | (no example yet — would follow Lazzaretto's cookie-domain handling, skip its SUBDOMAIN-templating) |
+| **PR-sandboxed** | (no example yet — would follow Lazzaretto's SUBDOMAIN-templating, skip its cookie-domain handling) | Lazzaretto: frontend + API on sibling subdomains, one instance per open PR sandbox plus the persistent deployment |
 
 **Single-origin, never-sandboxed** (Uptime Kuma's `status.${DOMAIN}`) is
 the simple case — copy the `oauth2-proxy-uptime-kuma` block verbatim,
@@ -41,8 +41,8 @@ rename every `-uptime-kuma` suffix to `-<app>`, and point
 subdomain. No `OAUTH2_PROXY_COOKIE_DOMAINS`, no `${SUBDOMAIN}` templating,
 no `add-redirect`/`remove-redirect` calls needed.
 
-**Multi-origin and/or PR-sandboxed** (Lazaretto) needs the fuller recipe
-below — copy the `oauth2-proxy-lazaretto` block instead, and apply
+**Multi-origin and/or PR-sandboxed** (Lazzaretto) needs the fuller recipe
+below — copy the `oauth2-proxy-lazzaretto` block instead, and apply
 whichever of its two techniques (cookie-domain handling for multi-origin,
 `${SUBDOMAIN}` templating + redirect registration for PR-sandboxed) your
 app actually needs. They're independent: a PR-sandboxed single-origin app
@@ -77,7 +77,7 @@ catalog entry.
 ### 2. `infra/edge/oauth2-proxy/compose.yaml`
 
 Copy the matching block (`oauth2-proxy-uptime-kuma` for the simple case,
-`oauth2-proxy-lazaretto` if you need either multi-origin or PR-sandboxed
+`oauth2-proxy-lazzaretto` if you need either multi-origin or PR-sandboxed
 handling) and rename every `-<app>` suffix: service key, `container_name`,
 `profiles`, the two `OIDC_CLIENT_ID_<APP>`/`OIDC_CLIENT_SECRET_<APP>` env
 var references, and every router/service/middleware name. Traefik
@@ -94,7 +94,7 @@ breaks unrelated apps instead of erroring at startup.
 | `OAUTH2_PROXY_COOKIE_NAME` | a per-app-unique name, e.g. `_oauth2_proxy_<app>` | oauth2-proxy defaults every instance to the same cookie name (`_oauth2_proxy`). Once `COOKIE_DOMAINS` broadens past your app's own host, that cookie is also sent to *every other app's* host under `${DOMAIN}` — colliding with any other single-origin consumer's own same-named, host-scoped cookie in the same `Cookie` header. Skipping this is the one broadening step that looks harmless and isn't. |
 | `OAUTH2_PROXY_WHITELIST_DOMAINS` | `.${DOMAIN}` (the shared parent) | oauth2-proxy's own safety check on the `rd` (return-destination) param that Traefik's oauth2-errors middleware passes to `/oauth2/sign_in` on any 401. A request that originated on the API host produces `rd=https://<api-host>/...`, which oauth2-proxy rejects as "domain / port not in whitelist" by default (it only trusts its configured redirect host, i.e. the frontend) — and that rejection doesn't just drop the param, it falls all the way back to a bare provider-authorize redirect instead of a normal sign-in-and-return bounce. **Fails silently in the same way as COOKIE_DOMAINS** — nothing points at this being the cause. |
 | Router `Host()` / `OAUTH2_PROXY_REDIRECT_URL` | the frontend host only | `/oauth2/callback` and `/oauth2/sign_in` only need to be reachable on one host — pick the frontend, since that's where users land first. |
-| API host's Traefik router | add a second, `Method(`OPTIONS`)`-matched router at higher priority with **no** oauth2 middlewares, pointed at the same backend service | A browser's CORS preflight never carries credentials (Fetch spec), so forwardAuth always sees it as unauthenticated and answers with the sign-in redirect — which browsers refuse to follow on a preflight, failing every cross-origin fetch before it's even sent. Confirmed live against lazaretto: see `apps/first-party/lazaretto/compose.yaml`'s `-api-preflight` router for the exact shape. Only matters if your frontend and API are different hosts *and* your frontend's requests trigger a preflight (any non-simple header, e.g. `Content-Type: application/json`, or credentialed cross-origin `fetch`) — a same-origin build never hits this. |
+| API host's Traefik router | add a second, `Method(`OPTIONS`)`-matched router at higher priority with **no** oauth2 middlewares, pointed at the same backend service | A browser's CORS preflight never carries credentials (Fetch spec), so forwardAuth always sees it as unauthenticated and answers with the sign-in redirect — which browsers refuse to follow on a preflight, failing every cross-origin fetch before it's even sent. Confirmed live against lazzaretto: see `apps/first-party/lazzaretto/compose.yaml`'s `-api-preflight` router for the exact shape. Only matters if your frontend and API are different hosts *and* your frontend's requests trigger a preflight (any non-simple header, e.g. `Content-Type: application/json`, or credentialed cross-origin `fetch`) — a same-origin build never hits this. |
 
 **If your app is PR-sandboxed** (regardless of single- or multi-origin),
 template everything that identifies an instance by `${SUBDOMAIN}` —
@@ -144,7 +144,7 @@ If your app also has a bare `Host()` router that isn't itself the
 oauth2-proxy instance's own path-scoped router, give it an explicit,
 lower `priority` than the oauth2-proxy router's `100` — otherwise that
 catch-all router also matches `/oauth2/*` requests on the same host and
-Traefik's tie-break becomes ambiguous. See Lazaretto's frontend router
+Traefik's tie-break becomes ambiguous. See Lazzaretto's frontend router
 (`priority: 10`) for a worked example.
 
 ### 4. PR-sandboxed only: nothing to touch in CI
@@ -179,7 +179,7 @@ only real caller.
 ## The forwarded-identity contract
 
 This is the platform's standard contract for every first-party app that
-needs real user identity, not just Lazaretto's. Get this right once here;
+needs real user identity, not just Lazzaretto's. Get this right once here;
 every future first-party app should be able to just follow it.
 
 - **`OAUTH2_PROXY_SET_AUTHORIZATION_HEADER: "true"`** — not `PASS_`, the
@@ -197,7 +197,7 @@ every future first-party app should be able to just follow it.
   `SET_` fails in the most confusing way possible: forwardAuth's own check
   still succeeds (your app's *access* is correctly gated), so nothing
   looks wrong until your app's own JWT verification throws on a `Bearer`
-  header that was never actually sent — confirmed live against Lazaretto:
+  header that was never actually sent — confirmed live against Lazzaretto:
   no `Authorization` header ever reached the backend, and its
   `AuthMiddleware` threw with no logger call at all, so even `docker logs`
   showed nothing pointing at the cause.
@@ -247,7 +247,7 @@ every future first-party app should be able to just follow it.
 - **The issuer is environment-provided, not hardcoded**: `auth.dev.
   quarantine.al` in dev, `auth.quarantine.al` in prod — same shape as
   `OAUTH2_PROXY_OIDC_ISSUER_URL: https://auth.${DOMAIN}` above. Read it
-  from an env var your app's own compose service sets (Lazaretto's
+  from an env var your app's own compose service sets (Lazzaretto's
   backend reads `ZITADEL_ISSUER_URL`), never a literal string in your
   app's own source.
 - **Exclude your own Docker healthcheck endpoint from whatever gates every
@@ -259,16 +259,16 @@ every future first-party app should be able to just follow it.
   the healthcheck itself: most HTTP clients (`wget` included) treat any
   4xx as a failure, so Docker reports a perfectly healthy container as
   unhealthy forever — which then also breaks `wait_healthy()` in every
-  future deploy that waits on it. Hit exactly this onboarding Lazaretto:
+  future deploy that waits on it. Hit exactly this onboarding Lazzaretto:
   the container booted and served real requests fine the whole time, but
   never left "unhealthy" until `/health` was excluded (see
-  `backend/src/app.module.ts`'s `AppModule.configure()` in the lazaretto
+  `backend/src/app.module.ts`'s `AppModule.configure()` in the lazzaretto
   repo for the fix). Nothing else needs a carve-out — only the one path
   your own compose file's healthcheck actually hits.
 
-**Lazaretto's backend is the reference implementation of this contract —
+**Lazzaretto's backend is the reference implementation of this contract —
 link to it, don't duplicate it.** See `backend/src/auth/auth.service.ts`
-and `backend/src/auth/auth-config.ts` in the lazaretto repo for the actual
+and `backend/src/auth/auth-config.ts` in the lazzaretto repo for the actual
 `AUTH_MODE` switch, JWKS verification, and role-claim scanning
 (`ROLE_CLAIM_PATTERN`, matching the `projects:roles` scope above without
 needing a `ZITADEL_PROJECT_ID` config entry) this whole section describes.
@@ -281,13 +281,13 @@ auth, data model) for the app side of this pattern.
 None of the above applies to plain local dev — running your app directly
 (`npm run start:dev` + Vite, or equivalent) never goes through Traefik or
 oauth2-proxy at all, so there's no forwarded token to verify. Your app
-needs its own explicit switch (Lazaretto's is `AUTH_MODE=required | off`,
+needs its own explicit switch (Lazzaretto's is `AUTH_MODE=required | off`,
 defaulting to `off`) so local dev and CI unit tests keep working with no
 forwarded identity, while every real deployment (persistent or PR sandbox
 — anything that actually goes through this compose fragment) sets it to
 `required`.
 
-## Reference: what the next app after Lazaretto touches
+## Reference: what the next app after Lazzaretto touches
 
 Onboarding a third `needs_oidc` app should touch exactly:
 
@@ -305,7 +305,7 @@ all driven off `catalog.yaml`'s `needs_oidc` entries, the same way
 `QuarantineAl/.github`'s `pr-sandbox-up.yml`/`pr-sandbox-down.yml` needs
 editing either (see step 4 above). Adding a documentation placeholder for
 the new app under `apps:` in `environments/_template/secrets.example.yaml`
-(mirroring the `lazaretto`/`uptime-kuma` entries) is good practice but not
+(mirroring the `lazzaretto`/`uptime-kuma` entries) is good practice but not
 required — `generate_secrets` creates the key either way.
 
 ## Known platform gaps

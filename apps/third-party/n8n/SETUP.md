@@ -5,16 +5,16 @@ provisioning, secrets generation) is handled by `quarantine start` once
 `n8n` is in an environment's `manifest.yaml`. The steps below are the part
 that genuinely has no automation — either because they're an interactive,
 one-shot decision (the owner account) or because they live outside this
-platform's provisioners entirely (Lazaretto's own headless-API contract).
+platform's provisioners entirely (Lazzaretto's own headless-API contract).
 
 Do them in this order, after the first `quarantine start` that brings n8n
 up healthy.
 
-## 1. Zitadel: role + machine user for Lazaretto's headless API
+## 1. Zitadel: role + machine user for Lazzaretto's headless API
 
 Corrects an assumption worth naming: this platform has **one shared
 Zitadel project** (`quarantine-apps`, see `provisioners/zitadel.sh`'s own
-header), not a separate project per app. A role added "for Lazaretto" is
+header), not a separate project per app. A role added "for Lazzaretto" is
 really added to that one shared project — every app's OIDC client in it can
 request it via the `urn:zitadel:iam:org:projects:roles` scope already
 listed in `docs/adding-oidc-to-your-app.md`.
@@ -28,7 +28,7 @@ header for why a machine user alone is the correct primitive here):
 
 ```bash
 ./bin/quarantine app add-role n8n agent:invoke \
-  --display-name "Invoke Lazaretto headless tasks"
+  --display-name "Invoke Lazzaretto headless tasks"
 
 ./bin/quarantine machine onboard n8n-automation \
   --grant n8n agent:invoke \
@@ -82,7 +82,7 @@ local n8n account this platform's model calls for — everyone else reaches
 the editor via the same Zitadel-backed forward-auth session; n8n itself
 has no idea any of that happened.
 
-## 4. In n8n: OAuth2 (client credentials) credential for Lazaretto
+## 4. In n8n: OAuth2 (client credentials) credential for Lazzaretto
 
 Editor → Credentials → New → **OAuth2 API** (or the closest n8n credential
 type supporting the client-credentials grant):
@@ -92,7 +92,7 @@ type supporting the client-credentials grant):
 - Client ID: `n8n-automation` (a machine user's username IS its client_id)
 - Client Secret: from step 1's `machine onboard` output, or
   `./bin/quarantine machine show n8n-automation`
-- Scope: at minimum whatever Lazaretto's headless API documents as required
+- Scope: at minimum whatever Lazzaretto's headless API documents as required
   for `agent:invoke` (see step 5)
 
 No credential JSON or workflow content is committed anywhere — n8n's own
@@ -100,10 +100,10 @@ encrypted-at-rest credential store (via `N8N_ENCRYPTION_KEY`) is the only
 copy, by design (see `apps/third-party/n8n/workflows/README.md` for what
 *does* get committed).
 
-## 5. Lazaretto's headless API contract
+## 5. Lazzaretto's headless API contract
 
-Reference, in the `lazaretto` repo, before building any workflow that calls
-Lazaretto:
+Reference, in the `lazzaretto` repo, before building any workflow that calls
+Lazzaretto:
 
 - `docs/headless-api.md` — the task API surface itself.
 - The `X-Callback-Secret` header — must equal the value n8n's own
@@ -111,13 +111,13 @@ Lazaretto:
   and exported to n8n's `.env` as `CALLBACK_STATIC_SECRET_N8N` — see
   `apps/third-party/n8n/compose.yaml`'s own comment and `catalog.yaml`'s
   `generated_secrets` entry for this app). Generated automatically on
-  n8n's first `quarantine start` unless Lazaretto already has a fixed
+  n8n's first `quarantine start` unless Lazzaretto already has a fixed
   value, in which case override `.apps["n8n"].callback_static_secret` via
   `secrets_edit` before that first start instead.
-- Direction matters: workflows call OUT to Lazaretto's headless API using
-  the OAuth2 credential from step 4 (over whatever host Lazaretto's own
+- Direction matters: workflows call OUT to Lazzaretto's headless API using
+  the OAuth2 credential from step 4 (over whatever host Lazzaretto's own
   docs specify). The *callback* runs the other way — when a long-running
-  Lazaretto task finishes, Lazaretto resumes the waiting workflow by
+  Lazzaretto task finishes, Lazzaretto resumes the waiting workflow by
   hitting n8n's own Wait-node resume URL directly at
   `http://quarantine-n8n:5678/webhook-waiting/<id>` over the internal
   `edge` Docker network — **never** through Traefik or `n8n.${DOMAIN}`,

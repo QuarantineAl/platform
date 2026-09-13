@@ -199,7 +199,7 @@ built for either environment.
 
 Observed on the `dev` runner, root cause not found:
 
-- Push events to `lazaretto`'s `develop` branch sometimes create no workflow
+- Push events to `lazzaretto`'s `develop` branch sometimes create no workflow
   run object at all (`gh run list`/`/status` show nothing — not even a
   queued run), for multiple consecutive pushes over a couple of hours.
   Ruled out: workflow-file syntax, repo Actions enablement, workflow

@@ -4,7 +4,7 @@ How to size an Incus VM for this platform, how to change one that is already
 running, and the handful of things that bite if you do it the obvious way.
 
 Written after a production incident in which agent turns were being killed
-mid-run inside `quarantine-qualitech-lazaretto-backend`. The container's
+mid-run inside `quarantine-qualitech-lazzaretto-backend`. The container's
 ceiling was too low, and the VM had no swap, so memory pressure went straight
 to a SIGKILL instead of slowing down. Every number below is measured on the
 real hosts rather than estimated — where a figure came from a guess, it says
@@ -29,9 +29,9 @@ so.
 | Disk | 100 GiB | 150–200 GiB on a host that also builds images |
 
 `Σ app ceilings` is the sum of every container `mem_limit` on that VM. For
-Lazaretto that is **1350 MiB** at concurrency 1, **1800 MiB** at 2 and
-**2700 MiB** at 4 — see `apps/first-party/lazaretto/compose.yaml` for the model
-and lazaretto's own `docs/PER_TENANT_CONTAINER_PLAN.md` §7a for its derivation.
+Lazzaretto that is **1350 MiB** at concurrency 1, **1800 MiB** at 2 and
+**2700 MiB** at 4 — see `apps/first-party/lazzaretto/compose.yaml` for the model
+and lazzaretto's own `docs/PER_TENANT_CONTAINER_PLAN.md` §7a for its derivation.
 
 Concretely, for `prod` as it stands (qualitech at concurrency 4, santec and
 lumistry at 2, plus the shared catalog instance at 4):
@@ -127,7 +127,7 @@ distinction between the two tiers:
 - **Recommended** — RAM covers `baseline + Σ ceilings` on its own. Nothing
   swaps in normal operation and swap is purely a crash-avoidance backstop.
 
-`provisioners/lazaretto-tenant.sh` warns when the ceilings on a host exceed
+`provisioners/lazzaretto-tenant.sh` warns when the ceilings on a host exceed
 what it can back, so you will hear about it on the next `tenant add` or
 `upgrade-all` rather than discovering it during an incident.
 
@@ -142,7 +142,7 @@ One coupling to know about: a container's CPU quota also decides its memory
 appetite, because Node reads the cgroup quota in `os.availableParallelism()`
 and JS toolchains size worker pools from it. **Giving a VM more vCPU raises the
 memory ceiling its containers need**, unless those containers pin `cpus`
-(Lazaretto's does, at 2). Verified: uncapped reports 4, `--cpus 2` reports 2,
+(Lazzaretto's does, at 2). Verified: uncapped reports 4, `--cpus 2` reports 2,
 `--cpus 1.5` reports 1.
 
 ### Disk
@@ -311,7 +311,7 @@ backends with swap disabled. Always set `memswap_limit` **above** `mem_limit`.
 
 **`docker update` does not survive a redeploy.** It writes `HostConfig` on
 disk, so the value survives a container restart and even a VM stop/start — but
-`lazaretto-tenant.sh upgrade` and `compose up --force-recreate` *recreate* the
+`lazzaretto-tenant.sh upgrade` and `compose up --force-recreate` *recreate* the
 container and it reverts to the formula. A hand-widened ceiling is a stopgap
 until the repo agrees with it.
 
@@ -363,8 +363,8 @@ sums to hundreds of MiB. Size off `anon`.
   a 2700 MiB ceiling each, with no per-PR scaling. Two concurrent sandboxes
   plus the shared instance is 8100 MiB of ceilings against a 7.7 GiB VM. They
   should be pinned to concurrency 1 (1350 MiB) by setting
-  `LAZARETTO_CLI_MAX_CONCURRENT`, `LAZARETTO_MEM_LIMIT` and
-  `LAZARETTO_MEMSWAP_LIMIT` where the sandbox is brought up
+  `LAZZARETTO_CLI_MAX_CONCURRENT`, `LAZZARETTO_MEM_LIMIT` and
+  `LAZZARETTO_MEMSWAP_LIMIT` where the sandbox is brought up
   (`QuarantineAl/.github`'s `pr-sandbox-up.yml`), not fixed in this repo.
 - **No host container has a memory limit**, and neither `incus.service` nor
   `docker.service` has `MemoryMax`. Any one of them can consume the box, and

@@ -462,7 +462,7 @@ cmd_start() {
   # per environment, via `observability: true` in that environment's
   # manifest.yaml. It used to come up unconditionally on every start, which
   # is ~1.48 GiB of the ~2.0 GiB shared-infra footprint — the single largest
-  # line item on a host that also has to fit per-tenant Lazaretto instances,
+  # line item on a host that also has to fit per-tenant Lazzaretto instances,
   # and dead weight on an environment nobody is currently instrumenting
   # (nothing in the app pushes to the collector today; see
   # PER_TENANT_CONTAINER_PLAN.md §9).
@@ -612,8 +612,8 @@ generate_env_file() {
   # per-environment value store the .env writer already reads, and the id is
   # environment-specific (each environment has its own Zitadel). Legitimately
   # empty: nothing needs it until an app verifies machine tokens, so read it
-  # directly rather than via req_secret. Consumed by lazaretto's headless
-  # tasks API as ZITADEL_AUDIENCE (apps/first-party/lazaretto/compose.yaml).
+  # directly rather than via req_secret. Consumed by lazzaretto's headless
+  # tasks API as ZITADEL_AUDIENCE (apps/first-party/lazzaretto/compose.yaml).
   zitadel_project_id="$(secrets_get "$plaintext" '.core.zitadel.project_id')"
 
   {
@@ -679,7 +679,7 @@ generate_env_file() {
   # is a catalog edit, with this function untouched).
   #
   # Generate-once-then-reuse, never regenerate: these key application data at
-  # rest — LAZARETTO_CREDENTIALS_KEY encrypts stored SSH keys and API tokens —
+  # rest — LAZZARETTO_CREDENTIALS_KEY encrypts stored SSH keys and API tokens —
   # so re-minting on a later `start` would silently make every existing
   # credential permanently undecryptable. The value is written back to
   # secrets.sops.yaml the first time and read from there forever after, which
@@ -687,7 +687,7 @@ generate_env_file() {
   #
   # Only apps IN THIS ENVIRONMENT'S MANIFEST are handled here. Per-tenant
   # instances are deliberately not in any manifest, and get their own
-  # per-tenant key via provisioners/lazaretto-tenant.sh, from the same
+  # per-tenant key via provisioners/lazzaretto-tenant.sh, from the same
   # catalog declaration.
   local gs_app gs_count gs_i gs_key gs_env gs_generator gs_path gs_value
   local secrets_dirty=false
@@ -978,7 +978,7 @@ _require_oidc_app() {
 # the layer a CI workflow actually calls — `pr-sandbox-up.yml`/
 # `pr-sandbox-down.yml` in QuarantineAl/.github never invoke
 # provisioners/*.sh directly, same as `quarantine start` never does either.
-# Generalized over any needs_oidc app, not hardcoded to lazaretto: a future
+# Generalized over any needs_oidc app, not hardcoded to lazzaretto: a future
 # PR-sandboxed app that also sets needs_oidc: true in catalog.yaml gets this
 # for free, with no workflow edit, by calling these two subcommands with its
 # own name.
@@ -1100,7 +1100,7 @@ cmd_user() {
 
 # ---------------------------------------------------------------------------
 # machine — service-account (non-human) identities, e.g. an n8n workflow
-# calling Lazaretto's headless API with no person behind it. See
+# calling Lazzaretto's headless API with no person behind it. See
 # provisioners/zitadel.sh's own header for why this is a machine user, not a
 # Project Application.
 # ---------------------------------------------------------------------------
@@ -1173,7 +1173,7 @@ cmd_machine_onboard() {
 }
 
 # ---------------------------------------------------------------------------
-# tenant — one Lazaretto instance per tenant
+# tenant — one Lazzaretto instance per tenant
 # ---------------------------------------------------------------------------
 
 # _tenant <verb> [args...] — decrypt once, hand off to the provisioner.
@@ -1191,7 +1191,7 @@ _tenant() {
   local plaintext
   plaintext="$(secrets_decrypt_to_tmpfs "$QUARANTINE_REPO" "$QUARANTINE_ENV")"
   trap_add "shred_file '${plaintext}'"
-  "${QUARANTINE_REPO}/provisioners/lazaretto-tenant.sh" "$verb" \
+  "${QUARANTINE_REPO}/provisioners/lazzaretto-tenant.sh" "$verb" \
     "$QUARANTINE_REPO" "$QUARANTINE_ENV" "$plaintext" "$@"
 }
 
@@ -1393,7 +1393,7 @@ Commands:
                           List every redirect URI registered on <name>'s
                           shared Zitadel Application.
   app add-role <name> <role> [--display-name D] [--group G]
-                          Add a project role (e.g. lazaretto-admin). Roles
+                          Add a project role (e.g. lazzaretto-admin). Roles
                           live on the shared project, not per Application.
   app list-roles <name> [--json]
                           List the shared project's roles.
@@ -1411,14 +1411,14 @@ Commands:
   user revoke <email> <app> <role>
                           Grant/revoke a project role for one person.
 
-  An identity alone grants no access to anything: reaching a Lazaretto
+  An identity alone grants no access to anything: reaching a Lazzaretto
   instance also needs membership of a tenant. See 'quarantine tenant'.
 
   machine onboard <username> --grant <app> <role> [--display-name D]
                           Create a Zitadel machine (service-account) user
                           and grant it a project role, in one call. For an
                           automation account with no person behind it (e.g.
-                          an n8n workflow calling Lazaretto's headless API)
+                          an n8n workflow calling Lazzaretto's headless API)
                           -- not an Application; see
                           provisioners/zitadel.sh's own header for why.
   machine add <username> [--display-name D]

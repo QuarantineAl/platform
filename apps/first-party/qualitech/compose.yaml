@@ -3,13 +3,13 @@
 #
 # Single-container static marketing site: a Next.js app exported to static
 # HTML/CSS/JS (no server-only features in use) and served by nginx — same
-# shape as lazaretto's frontend half, minus the paired backend, minus OIDC.
+# shape as lazzaretto's frontend half, minus the paired backend, minus OIDC.
 # No database, no OIDC, no per-tenant concept.
 #
 # SUBDOMAIN defaults to "qualitech" for the persistent catalog deployment
 # (quarantine app add qualitech / quarantine start) but is overridden per
 # invocation for a PR sandbox (pr-<n>-qualitech), same convention as
-# lazaretto's frontend fragment.
+# lazzaretto's frontend fragment.
 
 services:
   qualitech:

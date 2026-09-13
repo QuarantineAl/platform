@@ -101,7 +101,7 @@ are in the manifest:
 | Postgres 17.10-alpine | Shared datastore | stock image, one database + role per consumer; not a vendor fork |
 | Zitadel v4.16.1 (`zitadel-api` + `zitadel-login`) | OIDC identity provider | backs both the CLI's own provisioners and every catalog app with `needs_oidc: true` |
 | SigNoz + otel-collector | Observability | opt-in — `quarantine start` brings it up only when this environment's `manifest.yaml` sets `observability: true`. Never stopped by that flag; see docs/architecture.md |
-| oauth2-proxy | Forward-auth sidecar | present in every environment; one named instance per `needs_oidc` consumer (e.g. uptime-kuma, lazaretto), each dormant until its own profile is in the manifest — see `docs/adding-oidc-to-your-app.md` |
+| oauth2-proxy | Forward-auth sidecar | present in every environment; one named instance per `needs_oidc` consumer (e.g. uptime-kuma, lazzaretto), each dormant until its own profile is in the manifest — see `docs/adding-oidc-to-your-app.md` |
 
 One thing that is *not* part of that default set:
 
@@ -112,16 +112,16 @@ One thing that is *not* part of that default set:
 ## The app catalog
 
 `catalog.yaml` is the registry of every app `quarantine app add` knows
-how to deploy. Today it holds **lazaretto** (first-party, two-origin,
+how to deploy. Today it holds **lazzaretto** (first-party, two-origin,
 OIDC-fronted), **uptime-kuma** (subdomain `status`, no database,
 OIDC-fronted), **vaultwarden** (subdomain `vault`, OIDC-fronted), and
 **portainer** (internal container management, one instance per
-environment). Lazaretto and Uptime Kuma have no native OIDC support, so
+environment). Lazzaretto and Uptime Kuma have no native OIDC support, so
 the OIDC client each entry provisions is actually consumed by its own
 oauth2-proxy forward-auth sidecar, not the app directly — one named
 instance per consumer (see `docs/adding-oidc-to-your-app.md`). Uptime
 Kuma splits public status-page paths (unauthenticated) from its admin UI
-(protected); Lazaretto has no public path at all, so both of its routers
+(protected); Lazzaretto has no public path at all, so both of its routers
 (frontend + API) are gated wholesale. Vaultwarden is the odd one out: it
 has NATIVE OIDC/SSO support and is deliberately NOT behind oauth2-proxy at
 all — its Bitwarden-protocol clients (browser extension, desktop, mobile)
@@ -177,7 +177,7 @@ self-hosted CI runner for app deploys triggered from GitHub — see
 
 Two different things reach a host, by two different routes.
 
-**An app** (Lazaretto today) deploys from its own repo. A merge to its
+**An app** (Lazzaretto today) deploys from its own repo. A merge to its
 default branch runs `QuarantineAl/.github`'s reusable workflow on this
 environment's runner: it builds and pushes images tagged both
 `:<environment>` and `:<commit-sha>`, then brings the app up resolving the
@@ -213,7 +213,7 @@ On the target host, in `/opt/quarantine/repo`, with the SHA from the
 release you want:
 
 ```bash
-./bin/quarantine app add lazaretto --version <sha>
+./bin/quarantine app add lazzaretto --version <sha>
 ./bin/quarantine start
 ./bin/quarantine tenant upgrade-all <sha>
 ```

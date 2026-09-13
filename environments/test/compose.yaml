@@ -42,11 +42,11 @@ include:
   # --- apps/first-party: profile-gated, one profile per catalog.yaml entry
   # Included but NOT in this environment's manifest.yaml, so no shared
   # instance starts here. It is included so per-tenant instances
-  # (provisioners/lazaretto-tenant.sh) can be brought up against this
+  # (provisioners/lazzaretto-tenant.sh) can be brought up against this
   # environment, which is where the tenant onboarding round-trip is
   # exercised — a tenant instance is a compose project of its own, but it
   # still assembles from this environment's compose graph.
-  - path: ../../apps/first-party/lazaretto/compose.yaml
+  - path: ../../apps/first-party/lazzaretto/compose.yaml
 
   # --- apps/third-party: profile-gated, one profile per catalog.yaml entry
   - path: ../../apps/third-party/uptime-kuma/compose.yaml

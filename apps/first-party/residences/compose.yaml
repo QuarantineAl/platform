@@ -7,7 +7,7 @@
 #
 # SUBDOMAIN defaults to "residences" for the persistent catalog deployment
 # (quarantine app add residences / quarantine start) but is overridden per
-# invocation for a PR sandbox, same convention as qualitech/lazaretto.
+# invocation for a PR sandbox, same convention as qualitech/lazzaretto.
 
 services:
   residences:

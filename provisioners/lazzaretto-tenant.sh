@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# provisioners/lazaretto-tenant.sh — one Lazaretto instance per TENANT.
+# provisioners/lazzaretto-tenant.sh — one Lazzaretto instance per TENANT.
 #
 # Not invoked directly by CI or by hand — `quarantine tenant ...`
 # (bin/quarantine) is the operator-facing entry point and is what decrypts
@@ -16,7 +16,7 @@
 #   Adding a member to a tenant is therefore a TRUST DECISION, not a config
 #   change: members share a container, so one member's coding agent can read
 #   another's session workspaces, CLI OAuth tokens and the SQLite file itself.
-#   See lazaretto's docs/PER_TENANT_CONTAINER_PLAN.md §3. People who should
+#   See lazzaretto's docs/PER_TENANT_CONTAINER_PLAN.md §3. People who should
 #   not see each other's tokens get separate tenants — which is the default.
 #
 # THE TWO HALVES OF ONBOARDING
@@ -29,21 +29,21 @@
 #   when it writes the second without the first.
 #
 # Usage:
-#   lazaretto-tenant.sh add     <repo_root> <env> <secrets> <tenant> --email <e>[,<e>...] [--version V] [--concurrency N]
-#   lazaretto-tenant.sh list    <repo_root> <env> <secrets> [--json]
-#   lazaretto-tenant.sh show    <repo_root> <env> <secrets> <tenant> [--json]
-#   lazaretto-tenant.sh start|stop|restart|remove <repo_root> <env> <secrets> <tenant>
-#   lazaretto-tenant.sh purge   <repo_root> <env> <secrets> <tenant> [--yes]
-#   lazaretto-tenant.sh upgrade <repo_root> <env> <secrets> <tenant> [version]
-#   lazaretto-tenant.sh upgrade-all <repo_root> <env> <secrets> [version]
-#   lazaretto-tenant.sh logs    <repo_root> <env> <secrets> <tenant> [service...]
-#   lazaretto-tenant.sh member-add|member-remove <repo_root> <env> <secrets> <tenant> <email>
-#   lazaretto-tenant.sh member-list <repo_root> <env> <secrets> <tenant> [--json]
+#   lazzaretto-tenant.sh add     <repo_root> <env> <secrets> <tenant> --email <e>[,<e>...] [--version V] [--concurrency N]
+#   lazzaretto-tenant.sh list    <repo_root> <env> <secrets> [--json]
+#   lazzaretto-tenant.sh show    <repo_root> <env> <secrets> <tenant> [--json]
+#   lazzaretto-tenant.sh start|stop|restart|remove <repo_root> <env> <secrets> <tenant>
+#   lazzaretto-tenant.sh purge   <repo_root> <env> <secrets> <tenant> [--yes]
+#   lazzaretto-tenant.sh upgrade <repo_root> <env> <secrets> <tenant> [version]
+#   lazzaretto-tenant.sh upgrade-all <repo_root> <env> <secrets> [version]
+#   lazzaretto-tenant.sh logs    <repo_root> <env> <secrets> <tenant> [service...]
+#   lazzaretto-tenant.sh member-add|member-remove <repo_root> <env> <secrets> <tenant> <email>
+#   lazzaretto-tenant.sh member-list <repo_root> <env> <secrets> <tenant> [--json]
 #
 # DESIGN NOTES, each of which is a thing that bites if done the obvious way:
 #
 # * NO TENANT REGISTRY FILE. `list` and `show` derive live state from
-#   `docker compose ls`/`docker inspect` on the quarantine-lazaretto-<tenant>
+#   `docker compose ls`/`docker inspect` on the quarantine-lazzaretto-<tenant>
 #   project names, unioned with the tenant directories on disk. A registry
 #   would be a second source of truth and would drift the first time somebody
 #   removed a stack by hand. tenant.conf beside the allowlist holds only
@@ -72,8 +72,8 @@
 #   project. qcompose_scoped is the wrapper that allows that while still
 #   pinning --project-name and --env-file (see lib/common.sh).
 #
-# * LAZARETTO_VERSION IS EXPORTED EXPLICITLY. Both images are pinned to
-#   ${LAZARETTO_VERSION:-CHANGEME}, and that variable only reaches
+# * LAZZARETTO_VERSION IS EXPORTED EXPLICITLY. Both images are pinned to
+#   ${LAZZARETTO_VERSION:-CHANGEME}, and that variable only reaches
 #   environments/<env>/.env for apps in that environment's manifest. A tenant
 #   is deliberately not in any manifest, so omitting the export deploys a
 #   literal :CHANGEME tag.
@@ -100,17 +100,17 @@ source "${REPO_ROOT_SELF}/lib/common.sh"
 require_bash4
 require_cmd docker yq
 
-APP_NAME="lazaretto"
+APP_NAME="lazzaretto"
 
 # --- mode + argument parsing -------------------------------------------------
 VERB="${1:-}"
 case "$VERB" in
   add|list|show|start|stop|restart|remove|purge|upgrade|upgrade-all|logs| \
   member-add|member-remove|member-list) shift ;;
-  *) die "usage: provisioners/lazaretto-tenant.sh <verb> <repo_root> <env> <secrets_file> [...]  (see this file's header)" ;;
+  *) die "usage: provisioners/lazzaretto-tenant.sh <verb> <repo_root> <env> <secrets_file> [...]  (see this file's header)" ;;
 esac
 
-[[ $# -ge 3 ]] || die "usage: provisioners/lazaretto-tenant.sh ${VERB} <repo_root> <env> <plaintext_secrets_file> [...]"
+[[ $# -ge 3 ]] || die "usage: provisioners/lazzaretto-tenant.sh ${VERB} <repo_root> <env> <plaintext_secrets_file> [...]"
 repo_root="$1" env="$2" plaintext_file="$3"; shift 3
 [[ -f "$plaintext_file" ]] || die "plaintext secrets file not found: $plaintext_file"
 
@@ -173,11 +173,11 @@ TENANTS_ROOT="${QUARANTINE_TENANTS_DIR}/${env}"
 tenant_dir()      { printf '%s/%s' "$TENANTS_ROOT" "$1"; }
 tenant_allowlist(){ printf '%s/%s/authenticated-emails.txt' "$TENANTS_ROOT" "$1"; }
 tenant_conf()     { printf '%s/%s/tenant.conf' "$TENANTS_ROOT" "$1"; }
-tenant_project()  { printf 'quarantine-lazaretto-%s' "$1"; }
-tenant_subdomain(){ printf '%s-lazaretto' "$1"; }
-tenant_url()      { printf 'https://%s-lazaretto.%s' "$1" "$DOMAIN"; }
-tenant_callback() { printf 'https://%s-lazaretto.%s/oauth2/callback' "$1" "$DOMAIN"; }
-tenant_backend()  { printf 'quarantine-%s-lazaretto-backend' "$1"; }
+tenant_project()  { printf 'quarantine-lazzaretto-%s' "$1"; }
+tenant_subdomain(){ printf '%s-lazzaretto' "$1"; }
+tenant_url()      { printf 'https://%s-lazzaretto.%s' "$1" "$DOMAIN"; }
+tenant_callback() { printf 'https://%s-lazzaretto.%s/oauth2/callback' "$1" "$DOMAIN"; }
+tenant_backend()  { printf 'quarantine-%s-lazzaretto-backend' "$1"; }
 
 COMPOSE_APP="${repo_root}/apps/first-party/${APP_NAME}/compose.yaml"
 COMPOSE_PROXY="${repo_root}/infra/edge/oauth2-proxy/compose.yaml"
@@ -197,7 +197,7 @@ conf_write() {
   file="$(tenant_conf "$t")"
   install -m 600 /dev/null "${file}.new"
   {
-    printf '# Written by provisioners/lazaretto-tenant.sh. Operator inputs only —\n'
+    printf '# Written by provisioners/lazzaretto-tenant.sh. Operator inputs only —\n'
     printf '# live state (running/stopped, deployed image) is read from Docker.\n'
     printf 'version=%s\n' "$version"
     printf 'concurrency=%s\n' "$concurrency"
@@ -272,7 +272,7 @@ write_members() {
 # --- per-tenant generated secrets, from catalog.yaml's own declaration -------
 # Same mechanism generate_env_file uses for a manifest app, but resolved under
 # .tenants[<tenant>] so each tenant gets its OWN key. Generate-once: re-minting
-# LAZARETTO_CREDENTIALS_KEY would make every credential that tenant has stored
+# LAZZARETTO_CREDENTIALS_KEY would make every credential that tenant has stored
 # permanently undecryptable, so an existing value is never replaced.
 export_tenant_secrets() {
   local t="$1" count i key env_var generator path value
@@ -300,9 +300,9 @@ export_tenant_secrets() {
 # Per instance and scaled to the tenant. These numbers are re-derived from
 # PRODUCTION OOM DATA, not from the idle-host measurement they replace
 # (~67 MiB idle, ~250 MiB per turn), which was ~2.2x too low and killed real
-# turns: quarantine-qualitech-lazaretto-backend recorded oom_kill 5 and hit its
+# turns: quarantine-qualitech-lazzaretto-backend recorded oom_kill 5 and hit its
 # 1200 MiB ceiling 13,285 times. Full derivation, with the kernel's per-task
-# OOM dumps and the arithmetic, is in lazaretto's own
+# OOM dumps and the arithmetic, is in lazzaretto's own
 # docs/PER_TENANT_CONTAINER_PLAN.md section 7a.
 #
 #   mem_limit(C) = 100 + 450*C + 700*max(1, ceil(C/4)) + 100   MiB
@@ -315,7 +315,7 @@ export_tenant_secrets() {
 #
 # Two things below are load-bearing for that ceiling and are not decoration:
 #
-# * LAZARETTO_CPUS. Node reads the cgroup CPU quota in
+# * LAZZARETTO_CPUS. Node reads the cgroup CPU quota in
 #   os.availableParallelism(), and every JS toolchain sizes its worker pool
 #   from it — jest runs availableParallelism-1 workers. Verified on the dev
 #   host: uncapped reports 4, --cpus 2 reports 2, --cpus 1.5 reports 1. At 2, a
@@ -323,7 +323,7 @@ export_tenant_secrets() {
 #   ~250. That is a bigger saving than any plausible increase to mem_limit, and
 #   it is what keeps "one heavy tool run at a time" true rather than hoped.
 #
-# * LAZARETTO_MEMSWAP_LIMIT. Docker derives MemorySwap = 2 x Memory when only
+# * LAZZARETTO_MEMSWAP_LIMIT. Docker derives MemorySwap = 2 x Memory when only
 #   mem_limit is set, which is the value we want — but setting the two EQUAL is
 #   runc's signal to disable swap outright (it writes memory.swap.max=0). So
 #   `docker update --memory Xg --memory-swap Xg`, the obvious way to widen a
@@ -347,7 +347,7 @@ tenant_mem_limit_mib() {
   printf '%s' "$(( 100 + 450 * c + 700 * heavy + 100 ))"
 }
 
-# Warns when the lazaretto ceilings on this host approach what it can back.
+# Warns when the lazzaretto ceilings on this host approach what it can back.
 # mem_limit is a ceiling, not a reservation, so oversubscription is legal and
 # usually fine — tenants rarely peak together, and two of the three prod
 # tenants have never run a turn at all. It is worth saying out loud anyway,
@@ -371,7 +371,7 @@ warn_if_host_oversubscribed() {
   swap_mib=$(( $(awk '/^SwapTotal:/{print $2}' /proc/meminfo 2>/dev/null || echo 0) / 1024 ))
   (( mem_mib > 0 )) || return 0
 
-  # Reserve for everything that is not a lazaretto backend. Measured on the
+  # Reserve for everything that is not a lazzaretto backend. Measured on the
   # prod VM: ~1280 MiB of other containers (traefik, postgres, zitadel x2,
   # searxng, portainer, a runner) plus ~1230 MiB of dockerd/containerd anon,
   # unreclaimable slab and page tables.
@@ -387,12 +387,12 @@ warn_if_host_oversubscribed() {
     limit_bytes="$(docker inspect -f '{{.HostConfig.Memory}}' "$name" 2>/dev/null || echo 0)"
     [[ "$limit_bytes" =~ ^[0-9]+$ ]] || limit_bytes=0
     total_mib=$(( total_mib + limit_bytes / 1048576 ))
-  done < <(docker ps -a --filter 'name=lazaretto-backend' --format '{{.Names}}' 2>/dev/null || true)
+  done < <(docker ps -a --filter 'name=lazzaretto-backend' --format '{{.Names}}' 2>/dev/null || true)
 
   total_mib=$(( total_mib + incoming_mib ))
   local pct=$(( total_mib * 100 / capacity_mib ))
   if (( pct >= 85 )); then
-    warn "lazaretto memory ceilings on this host now total ${total_mib} MiB — ${pct}% of the ~${capacity_mib} MiB it can back (${mem_mib} MiB RAM + ${swap_mib} MiB swap - ${reserve_mib} MiB for everything else)."
+    warn "lazzaretto memory ceilings on this host now total ${total_mib} MiB — ${pct}% of the ~${capacity_mib} MiB it can back (${mem_mib} MiB RAM + ${swap_mib} MiB swap - ${reserve_mib} MiB for everything else)."
     warn "A ceiling is not a reservation, so this is legal and probably fine today. But if these tenants ever peak together the VM-wide OOM killer picks by resident size, and it may take postgres or traefik instead of one turn."
     warn "Fixes, cheapest first: add swap, lower a tenant's --concurrency, or grow the VM. See docs/vm-sizing-and-provisioning.md."
   fi
@@ -415,19 +415,19 @@ tenant_up() {
 
   export SUBDOMAIN; SUBDOMAIN="$(tenant_subdomain "$t")"
   export DOMAIN
-  export LAZARETTO_VERSION="$version"
-  export LAZARETTO_ALLOWLIST_FILE; LAZARETTO_ALLOWLIST_FILE="$(tenant_allowlist "$t")"
+  export LAZZARETTO_VERSION="$version"
+  export LAZZARETTO_ALLOWLIST_FILE; LAZZARETTO_ALLOWLIST_FILE="$(tenant_allowlist "$t")"
   # Empty, not unset: this is what turns oauth2-proxy's allowAll off so the
   # allowlist is actually consulted. See the header.
-  export LAZARETTO_EMAIL_DOMAINS=""
-  export LAZARETTO_CLI_MAX_CONCURRENT="$concurrency"
+  export LAZZARETTO_EMAIL_DOMAINS=""
+  export LAZZARETTO_CLI_MAX_CONCURRENT="$concurrency"
   local mem_mib; mem_mib="$(tenant_mem_limit_mib "$concurrency")"
-  export LAZARETTO_MEM_LIMIT="${mem_mib}m"
-  # mem_limit plus an equal amount of swap. Must not equal LAZARETTO_MEM_LIMIT
+  export LAZZARETTO_MEM_LIMIT="${mem_mib}m"
+  # mem_limit plus an equal amount of swap. Must not equal LAZZARETTO_MEM_LIMIT
   # — see the header for why that disables swap rather than capping it.
-  export LAZARETTO_MEMSWAP_LIMIT="$(( mem_mib * 2 ))m"
-  export LAZARETTO_CPUS=2
-  export LAZARETTO_PIDS_LIMIT=512
+  export LAZZARETTO_MEMSWAP_LIMIT="$(( mem_mib * 2 ))m"
+  export LAZZARETTO_CPUS=2
+  export LAZZARETTO_PIDS_LIMIT=512
   export_tenant_secrets "$t"
   warn_if_host_oversubscribed "$t" "$mem_mib"
 
@@ -446,7 +446,7 @@ tenant_up() {
   local -a up_args=(up -d --wait --wait-timeout 180)
   [[ "$pull" == pull ]] && up_args+=(--pull always)
 
-  log "bringing up tenant '${t}' (project $(tenant_project "$t"), image tag ${version}, concurrency ${concurrency}, mem ${LAZARETTO_MEM_LIMIT}, swap +${LAZARETTO_MEM_LIMIT}, cpus ${LAZARETTO_CPUS}${pull:+, pulling})"
+  log "bringing up tenant '${t}' (project $(tenant_project "$t"), image tag ${version}, concurrency ${concurrency}, mem ${LAZZARETTO_MEM_LIMIT}, swap +${LAZZARETTO_MEM_LIMIT}, cpus ${LAZZARETTO_CPUS}${pull:+, pulling})"
   qcompose_scoped "$(tenant_project "$t")" "$env" \
     -f "$COMPOSE_APP" -f "$COMPOSE_PROXY" \
     --profile "$APP_NAME" "${up_args[@]}"
@@ -507,9 +507,9 @@ tenant_compose() {
   local t="$1"; shift
   export SUBDOMAIN; SUBDOMAIN="$(tenant_subdomain "$t")"
   export DOMAIN
-  export LAZARETTO_ALLOWLIST_FILE; LAZARETTO_ALLOWLIST_FILE="$(tenant_allowlist "$t")"
-  export LAZARETTO_EMAIL_DOMAINS=""
-  local version; version="$(conf_get "$t" version)"; export LAZARETTO_VERSION="${version:-$env}"
+  export LAZZARETTO_ALLOWLIST_FILE; LAZZARETTO_ALLOWLIST_FILE="$(tenant_allowlist "$t")"
+  export LAZZARETTO_EMAIL_DOMAINS=""
+  local version; version="$(conf_get "$t" version)"; export LAZZARETTO_VERSION="${version:-$env}"
   qcompose_scoped "$(tenant_project "$t")" "$env" \
     -f "$COMPOSE_APP" -f "$COMPOSE_PROXY" --profile "$APP_NAME" "$@"
 }
@@ -522,7 +522,7 @@ all_tenants() {
   {
     docker compose ls --all --format json 2>/dev/null \
       | yq -p json '.[].Name' 2>/dev/null \
-      | sed -n 's/^quarantine-lazaretto-//p' || true
+      | sed -n 's/^quarantine-lazzaretto-//p' || true
     [[ -d "$TENANTS_ROOT" ]] && find "$TENANTS_ROOT" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; || true
   } | sort -u | grep -v '^$' || true
 }
@@ -675,10 +675,10 @@ if [[ "$VERB" == "show" ]]; then
     || die "no tenant '${tenant}' in environment '${env}'"
   deployed="$(tenant_deployed_version "$tenant")"
   concurrency="$(conf_get "$tenant" concurrency)"; concurrency="${concurrency:-2}"
-  volume="$(tenant_project "$tenant")_lazaretto-data"
+  volume="$(tenant_project "$tenant")_lazzaretto-data"
   members_json="$(read_members "$tenant" | json_string_array)"
 
-  body="$(printf '{"tenant":"%s","url":"%s","apiUrl":"https://%s-lazaretto-api.%s","status":"%s","version":"%s","project":"%s","volume":"%s","allowlist":"%s","concurrency":%s,"members":%s}' \
+  body="$(printf '{"tenant":"%s","url":"%s","apiUrl":"https://%s-lazzaretto-api.%s","status":"%s","version":"%s","project":"%s","volume":"%s","allowlist":"%s","concurrency":%s,"members":%s}' \
     "$tenant" "$(tenant_url "$tenant")" "$tenant" "$DOMAIN" "$status" "${deployed:-unknown}" \
     "$(tenant_project "$tenant")" "$volume" "$(tenant_allowlist "$tenant")" "$concurrency" "$members_json")"
 
@@ -772,4 +772,4 @@ case "$VERB" in
     exit 0 ;;
 esac
 
-die "unhandled verb '${VERB}' (this is a bug in lazaretto-tenant.sh)"
+die "unhandled verb '${VERB}' (this is a bug in lazzaretto-tenant.sh)"

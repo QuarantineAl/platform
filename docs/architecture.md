@@ -120,7 +120,7 @@ never more than two levels deep:
 contain source code; `first-party/` holds thin deploy fragments
 referencing `ghcr.io/...` images for this org's own apps — never their
 source, which lives in each app's own repository. `catalog.yaml` today
-lists `lazaretto` (first-party), plus `uptime-kuma` and `portainer`
+lists `lazzaretto` (first-party), plus `uptime-kuma` and `portainer`
 (third-party); Immich and Stirling PDF were considered early on and
 deferred — see Status.
 
