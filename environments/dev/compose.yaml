@@ -47,7 +47,16 @@ include:
   - path: ../../apps/first-party/lazaretto/compose.yaml
   - path: ../../apps/first-party/qualitech/compose.yaml
   - path: ../../apps/first-party/residences/compose.yaml
+  - path: ../../apps/first-party/kujtime/compose.yaml
 
   # --- apps/third-party: profile-gated, one profile per catalog.yaml entry
   - path: ../../apps/third-party/uptime-kuma/compose.yaml
   - path: ../../apps/third-party/searxng/compose.yaml
+  # n8n was in _template but missing here (dev had never needed it before —
+  # confirmed against _template/compose.yaml, which also still has
+  # portainer/vaultwarden that dev lacks; those two are unrelated to this
+  # change and left alone). kujtime's social-publishing dispatch
+  # (apps/web/lib/jobs/social-dispatch.ts) calls n8n internally over the
+  # edge network, so dev needs it running for that path to be testable at
+  # all — see docs/PLAN.md §7/§10 on this exact gap.
+  - path: ../../apps/third-party/n8n/compose.yaml
