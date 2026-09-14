@@ -41,22 +41,22 @@
 #                 docs/adding-an-app.md.
 
 apps:
-  - name: lazaretto
+  - name: lazzaretto
     kind: app
-    compose_path: apps/first-party/lazaretto/compose.yaml
-    subdomain: lazaretto
+    compose_path: apps/first-party/lazzaretto/compose.yaml
+    subdomain: lazzaretto
     needs_db: false
     needs_oidc: true
     oidc_redirect_uris:
-      - "https://lazaretto.${DOMAIN}/oauth2/callback"
+      - "https://lazzaretto.${DOMAIN}/oauth2/callback"
     generated_secrets:
       # AES-256-GCM master key for the Credentials feature (SSH keys, GitHub
       # tokens, npm tokens) — backend/src/common/secret-crypto.ts reads it as
-      # LAZARETTO_CREDENTIALS_KEY and requires exactly 32 bytes of hex.
+      # LAZZARETTO_CREDENTIALS_KEY and requires exactly 32 bytes of hex.
       # Per-tenant instances get their own key rather than sharing this one,
       # so one tenant's stored credentials are not decryptable with another's.
       - key: credentials_key
-        env: LAZARETTO_CREDENTIALS_KEY
+        env: LAZZARETTO_CREDENTIALS_KEY
         generator: hex32
     notes: >-
       Two-origin app: frontend at ${subdomain}.${DOMAIN}, backend/API at
@@ -67,7 +67,7 @@ apps:
       see that file's own Dockerfile comment), pointed at this
       environment's -api hostname by the calling CI workflow. The platform's
       first multi-origin, PR-sandboxed OIDC consumer: the
-      oauth2-proxy-lazaretto instance (infra/edge/oauth2-proxy/compose.yaml)
+      oauth2-proxy-lazzaretto instance (infra/edge/oauth2-proxy/compose.yaml)
       is ${SUBDOMAIN}-templated (one per open PR sandbox plus the
       persistent deployment), each sets OAUTH2_PROXY_COOKIE_DOMAINS to the
       shared parent domain so its cookie is valid across both of that
@@ -75,13 +75,13 @@ apps:
       routers wholesale — no unauthenticated path, unlike uptime-kuma's
       public/admin split (own ARCHITECTURE.md-documented "no auth" gap this
       closes). Only the persistent host's callback is registered above —
-      every PR sandbox (pr-<n>-lazaretto, see docs/runners-and-sandboxing.md)
+      every PR sandbox (pr-<n>-lazzaretto, see docs/runners-and-sandboxing.md)
       shares the ONE Zitadel Application (same client_id/secret) but
       registers and later deregisters its OWN redirect URI on it via
       provisioners/zitadel.sh's add-redirect/remove-redirect modes, called
       from QuarantineAl/.github's pr-sandbox-up.yml/pr-sandbox-down.yml as
       the sandbox opens/closes. See docs/adding-oidc-to-your-app.md for the
-      full recipe and docs/USER_MANAGEMENT_OIDC_ZITADEL.md (in the lazaretto
+      full recipe and docs/USER_MANAGEMENT_OIDC_ZITADEL.md (in the lazzaretto
       repo) for the app-side JWT verification this backs.
 
   - name: uptime-kuma
@@ -122,7 +122,7 @@ apps:
         generator: alnum32
     notes: >-
       Vaultwarden has NATIVE OIDC/SSO support — unlike uptime-kuma and
-      lazaretto, the OIDC client this entry provisions is consumed
+      lazzaretto, the OIDC client this entry provisions is consumed
       DIRECTLY by Vaultwarden itself, never by an oauth2-proxy sidecar
       (no oauth2-proxy-vaultwarden block exists in infra/edge/oauth2-proxy/
       compose.yaml, and none is needed). Deliberately not fronted by
@@ -155,7 +155,7 @@ apps:
       # AES master key for n8n's own Credentials feature (stored OAuth
       # tokens, API keys) — generate once, never rotate: rotating it makes
       # every existing stored credential permanently undecryptable. Same
-      # treatment as lazaretto's credentials_key above.
+      # treatment as lazzaretto's credentials_key above.
       - key: encryption_key
         env: N8N_ENCRYPTION_KEY
         generator: hex32
@@ -188,13 +188,13 @@ apps:
       - key: db_password
         env: DATABASE_PASSWORD_N8N
         generator: alnum32
-      # Shared with Lazaretto's own headless-API callback contract
-      # (X-Callback-Secret header, docs/headless-api.md in the lazaretto
-      # repo) — both sides must hold the same value. If Lazaretto already has
+      # Shared with Lazzaretto's own headless-API callback contract
+      # (X-Callback-Secret header, docs/headless-api.md in the lazzaretto
+      # repo) — both sides must hold the same value. If Lazzaretto already has
       # one, override this via secrets_edit BEFORE n8n's first
       # `quarantine start` instead of letting it autogenerate; see
       # apps/third-party/n8n/SETUP.md. env is CALLBACK_STATIC_SECRET_N8N,
-      # not the bare "CALLBACK_STATIC_SECRET" Lazaretto's own side may use
+      # not the bare "CALLBACK_STATIC_SECRET" Lazzaretto's own side may use
       # internally — same flat-.env collision reasoning as db_password
       # above; only the VALUE has to match between the two repos, not the
       # variable name holding it on this side.
@@ -245,7 +245,7 @@ apps:
     needs_oidc: false
     notes: >-
       Static marketing site (Next.js static export, no server-only
-      features) served by nginx — a single container, unlike lazaretto's
+      features) served by nginx — a single container, unlike lazzaretto's
       backend+frontend pair. Built by its own repo's GitHub Actions
       workflows rather than QuarantineAl/.github's reusable deploy-app.yml/
       pr-sandbox-*.yml, which assume a two-image app shape. QuarantineAl/
@@ -277,23 +277,23 @@ apps:
       # var, never written into settings.yml — searx/settings_defaults.py
       # declares secret_key with environ_name='SEARXNG_SECRET' — so it stays
       # out of this repo and off the host's disk. Rotating it is harmless:
-      # nothing is encrypted at rest with it, unlike lazaretto's
+      # nothing is encrypted at rest with it, unlike lazzaretto's
       # credentials_key.
       - key: searxng_secret
         env: SEARXNG_SECRET
         generator: alnum32
     notes: >-
-      Self-hosted metasearch, added so Lazaretto's Ollama tool loop has a
+      Self-hosted metasearch, added so Lazzaretto's Ollama tool loop has a
       web-search tool whose queries never leave this host — the alternative
       being a third-party search API key or Ollama's hosted endpoint, both
       of which send every query off the infrastructure. Deliberately has NO
       subdomain: it is the one catalog app with no Traefik router and no
       oauth2-proxy, because nothing human browses it. Its only client is the
-      MCP search server Lazaretto spawns, which reaches it over the internal
+      MCP search server Lazzaretto spawns, which reaches it over the internal
       edge network at http://quarantine-searxng:8080. That containment is
       what makes disabling SearXNG's bot limiter safe (the limiter 403s
       exactly the programmatic traffic we want) — read
       apps/third-party/searxng/settings.yml before giving this a Host()
-      rule. One shared instance serves the shared Lazaretto and every
+      rule. One shared instance serves the shared Lazzaretto and every
       per-tenant instance: search is stateless and SearXNG logs no queries
       by default, so there is nothing tenant-specific to keep apart.

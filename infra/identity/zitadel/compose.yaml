@@ -78,7 +78,7 @@ services:
       # upstream bug — zitadel/zitadel#10526, #11134, #11142). The legacy
       # UI (bundled in zitadel-api, served at /ui/login) doesn't have this
       # problem and is what Console falls back to with the flag off.
-      # lazaretto's own OIDC flow is unaffected either way: token/JWKS/
+      # lazzaretto's own OIDC flow is unaffected either way: token/JWKS/
       # end_session are core-API endpoints, independent of which UI renders
       # the interactive sign-in screen.
       #

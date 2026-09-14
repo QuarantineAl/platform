@@ -54,7 +54,7 @@
 # bin/quarantine). Every var is override-able via the environment so a
 # one-off manual test (e.g. a short-lived, repo-scoped registration token)
 # can run this exact file unmodified:
-#   RUNNER_SCOPE=repo REPO_URL=https://github.com/QuarantineAl/lazaretto \
+#   RUNNER_SCOPE=repo REPO_URL=https://github.com/QuarantineAl/lazzaretto \
 #     RUNNER_TOKEN=<token> docker compose -f infra/ci/github-runner/compose.yaml up -d
 #
 # PIN CHECKPOINT: myoung34/github-runner:latest — env vars (ACCESS_TOKEN vs
