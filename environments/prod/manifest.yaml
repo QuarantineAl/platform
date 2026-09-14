@@ -20,7 +20,7 @@
 #   quarantine start
 apps:
   - name: portainer
-  - name: lazaretto
+  - name: lazzaretto
     version: prod
   - name: searxng
   - name: n8n

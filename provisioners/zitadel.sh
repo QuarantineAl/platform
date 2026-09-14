@@ -34,17 +34,17 @@
 #       Shared-Application mode: add or remove one redirect URI (and its
 #       derived postLogoutRedirectUri) on <canonical_name>'s ALREADY-EXISTING
 #       Application, instead of creating a new per-invocation Application.
-#       <canonical_name> is the real catalog.yaml name (e.g. "lazaretto"),
+#       <canonical_name> is the real catalog.yaml name (e.g. "lazzaretto"),
 #       never a "pr-<n>-<app>" name — there is no such Application under
 #       this mode, so a PR-shaped name here just fails the ListApplications
 #       lookup below with a clear "no Zitadel application named ... found"
 #       error rather than silently doing the wrong thing. Built for
-#       lazaretto's PR sandboxes: every PR sandbox and the persistent
+#       lazzaretto's PR sandboxes: every PR sandbox and the persistent
 #       deployment share ONE Application (one client_id/secret, no per-PR
 #       secret churn, no per-PR Application left behind by a closed PR that
-#       never gets torn down — see lazaretto's own
+#       never gets torn down — see lazzaretto's own
 #       docs/USER_MANAGEMENT_OIDC_ZITADEL.md, "PR preview links" section,
-#       for the full rationale). Only lazaretto uses this today; a future
+#       for the full rationale). Only lazzaretto uses this today; a future
 #       app that's also PR-sandboxed and wants the same treatment would call
 #       `quarantine app add-redirect`/`remove-redirect` the same way, keyed
 #       on ITS OWN canonical name — see docs/adding-oidc-to-your-app.md.
@@ -82,7 +82,7 @@
 #       Human identity management. Provisioning an instance is only half of
 #       onboarding: the person who logs in lives in Zitadel, and their
 #       membership of a tenant lives in that tenant's oauth2-proxy allowlist
-#       (provisioners/lazaretto-tenant.sh). EMAIL is the join key between the
+#       (provisioners/lazzaretto-tenant.sh). EMAIL is the join key between the
 #       two, and neither half implies the other — a Zitadel user with no
 #       allowlist entry authenticates and is then 403'd at the edge; an
 #       allowlist entry with no Zitadel user is inert. These modes therefore
@@ -132,7 +132,7 @@
 #       Machine (service-account) identity management — the automation-account
 #       counterpart to the human user-* modes above, for the case where
 #       something calls an API with no person behind it (e.g. an n8n workflow
-#       calling Lazaretto's headless API). Deliberately NOT an Application:
+#       calling Lazzaretto's headless API). Deliberately NOT an Application:
 #       Zitadel's own client-credentials guide for service accounts confirms a
 #       machine user plus a generated client secret is sufficient for the
 #       OAuth2 client_credentials grant — no Project Application, no
@@ -151,7 +151,7 @@
 #       nothing locally at all. machine-show reads it back for re-display
 #       without regenerating (regenerating would invalidate whatever's
 #       already pasted into a downstream credential, e.g. n8n's own OAuth2
-#       credential for Lazaretto — see apps/third-party/n8n/SETUP.md).
+#       credential for Lazzaretto — see apps/third-party/n8n/SETUP.md).
 #
 #       machine-grant/machine-revoke reuse the exact same project-role
 #       read-modify-write as user-grant/user-revoke (a UserGrant is keyed on
@@ -350,7 +350,7 @@ if [[ -n "$email" ]]; then
 fi
 if [[ -n "$role" ]]; then
   # Zitadel role keys are free-form strings; this is the conservative subset
-  # that covers every realistic key (e.g. "lazaretto-admin") without
+  # that covers every realistic key (e.g. "lazzaretto-admin") without
   # admitting a quote or backslash.
   [[ "$role" =~ ^[A-Za-z0-9._:-]+$ ]] \
     || die "invalid role '${role}': letters, digits, dot, underscore, colon, hyphen only"
@@ -729,7 +729,7 @@ fi
 # (always the shared one today) and is validated as a real catalog app so a
 # typo can't silently create a role nobody will ever see; it does NOT scope
 # the role itself. Keys are conventionally app-prefixed for that reason —
-# "lazaretto-admin", which is exactly the key lazaretto-backend's AuthService
+# "lazzaretto-admin", which is exactly the key lazzaretto-backend's AuthService
 # scans for in the urn:zitadel:iam:org:project:<id>:roles claim.
 # =============================================================================
 if [[ "$MODE" == "app-add-role" ]]; then
@@ -1024,7 +1024,7 @@ if [[ "$MODE" == "machine-add" ]]; then
 
   display_name="${machine_display_name:-$username}"
   # accessTokenType: JWT, not the server default (BEARER, an opaque
-  # reference token) — Lazaretto's own forwarded-identity contract
+  # reference token) — Lazzaretto's own forwarded-identity contract
   # (docs/adding-oidc-to-your-app.md) already requires every first-party
   # backend to verify a self-contained JWT against Zitadel's JWKS rather
   # than call back into Zitadel to introspect an opaque token; a machine
@@ -1179,7 +1179,7 @@ if [[ "$MODE" == "add-redirect" || "$MODE" == "remove-redirect" ]]; then
     # not an exceptional one: pr-sandbox-up.yml calls this on every push to
     # an open PR, and only the first push for a given PR number actually
     # changes anything -- every push after that would otherwise fail CI on
-    # a call that has nothing left to do (confirmed live: lazaretto PR #18's
+    # a call that has nothing left to do (confirmed live: lazzaretto PR #18's
     # second push failed exactly this way). Symmetrically covers
     # remove-redirect against a URI that's already gone (a PR closed twice,
     # or closed after a failed add). Comparing here, before ever calling
@@ -1284,7 +1284,7 @@ fi
 # idTokenUserinfoAssertion is NOT Zitadel's default and has to be asked for.
 # Without it the id_token carries sub/iss/aud and nothing else — no email, no
 # name — and under the oauth2-proxy model that token is the ONLY thing a
-# first-party backend ever sees. Lazaretto's AuthService reads email and name
+# first-party backend ever sees. Lazzaretto's AuthService reads email and name
 # straight off those claims, so it stores empty strings and every user shows
 # up nameless: a blank display name, a blank email, and an avatar falling
 # back to "?" because there are no initials to derive.

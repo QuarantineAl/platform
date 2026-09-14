@@ -18,7 +18,7 @@ server:
   # generates and persists it via catalog.yaml's generated_secrets.
 
   # Off because this instance is not internet-facing: it listens only on the
-  # internal `edge` network and is reachable solely by Lazaretto's MCP search
+  # internal `edge` network and is reachable solely by Lazzaretto's MCP search
   # server. The limiter is SearXNG's bot defence and it rejects exactly the
   # traffic we want — programmatic, no browser cookies — with 403s. Leaving it
   # on is the single most common reason a self-hosted SearXNG returns 403 to

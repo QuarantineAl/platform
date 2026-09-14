@@ -52,14 +52,14 @@
 # (OAuth tokens, API keys, etc.) in that same Postgres database — generated
 # ONCE via catalog.yaml's generated_secrets (hex32) and never rotated:
 # rotating it makes every existing stored credential permanently
-# undecryptable, the same treatment as LAZARETTO_CREDENTIALS_KEY.
+# undecryptable, the same treatment as LAZZARETTO_CREDENTIALS_KEY.
 #
-# CALLBACK_STATIC_SECRET_N8N is shared with Lazaretto's own headless-API
-# contract (docs/headless-api.md in the lazaretto repo — the
+# CALLBACK_STATIC_SECRET_N8N is shared with Lazzaretto's own headless-API
+# contract (docs/headless-api.md in the lazzaretto repo — the
 # X-Callback-Secret header n8n workflows must send when calling
-# Lazaretto's task-callback endpoints); only the VALUE has to match
-# Lazaretto's own side, not this variable's name. Generated here via
-# generated_secrets like the other two; if Lazaretto already has a fixed
+# Lazzaretto's task-callback endpoints); only the VALUE has to match
+# Lazzaretto's own side, not this variable's name. Generated here via
+# generated_secrets like the other two; if Lazzaretto already has a fixed
 # value for this, override it here via `secrets_edit` BEFORE the first
 # `quarantine start` for n8n instead of letting it autogenerate — see
 # apps/third-party/n8n/SETUP.md. Not consumed by n8n itself (no such
@@ -67,7 +67,7 @@
 # editor can reference it as {{$env.CALLBACK_STATIC_SECRET}} — the
 # container-facing name below, mapped from the host-side
 # ${CALLBACK_STATIC_SECRET_N8N} the same way DB_POSTGRESDB_PASSWORD is
-# mapped from ${DATABASE_PASSWORD_N8N} above — when calling Lazaretto over
+# mapped from ${DATABASE_PASSWORD_N8N} above — when calling Lazzaretto over
 # the internal network.
 #
 # Image registry note: n8n's own current docs recommend docker.n8n.io/n8nio/
@@ -125,10 +125,10 @@ services:
       N8N_DIAGNOSTICS_ENABLED: "false"
       N8N_VERSION_NOTIFICATIONS_ENABLED: "false"
 
-      # Shared with Lazaretto's headless-API contract — see file header.
+      # Shared with Lazzaretto's headless-API contract — see file header.
       CALLBACK_STATIC_SECRET: ${CALLBACK_STATIC_SECRET_N8N}
     healthcheck:
-      # 127.0.0.1, not localhost — see apps/first-party/lazaretto/
+      # 127.0.0.1, not localhost — see apps/first-party/lazzaretto/
       # compose.yaml's identical note on why (some images' /etc/hosts
       # resolves localhost to ::1 first, and n8n binds 0.0.0.0 / IPv4 only).
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:5678/healthz"]

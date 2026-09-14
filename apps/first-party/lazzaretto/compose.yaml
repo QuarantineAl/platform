@@ -1,51 +1,51 @@
-# apps/first-party/lazaretto/compose.yaml — ${SUBDOMAIN:-lazaretto}.${DOMAIN}
-# (catalog.yaml: lazaretto)
+# apps/first-party/lazzaretto/compose.yaml — ${SUBDOMAIN:-lazzaretto}.${DOMAIN}
+# (catalog.yaml: lazzaretto)
 #
-# Two services, two hostnames — mirrors the frontend/-api split lazaretto's
+# Two services, two hostnames — mirrors the frontend/-api split lazzaretto's
 # own DOCKER.md documents for its manual deployment. VITE_API_BASE is baked
 # into the frontend image at CI build time by rewriting
-# frontend/.env.production before `docker build` (lazaretto/frontend/
+# frontend/.env.production before `docker build` (lazzaretto/frontend/
 # Dockerfile deliberately reads only that file, never a build ARG/ENV — an
 # already-set process.env value, even empty, would silently win over it) —
 # that rewrite is the calling CI workflow's job, not this fragment's.
 #
-# SUBDOMAIN defaults to "lazaretto" for the persistent catalog deployment
-# (quarantine app add lazaretto / quarantine start) but is overridden per
-# invocation for a PR sandbox (pr-<n>-lazaretto), so this ONE fragment
+# SUBDOMAIN defaults to "lazzaretto" for the persistent catalog deployment
+# (quarantine app add lazzaretto / quarantine start) but is overridden per
+# invocation for a PR sandbox (pr-<n>-lazzaretto), so this ONE fragment
 # serves both — see docs/runners-and-sandboxing.md's per-PR section. The
-# `profiles: [lazaretto]` gate is a STATIC app-identity label (matches
+# `profiles: [lazzaretto]` gate is a STATIC app-identity label (matches
 # catalog.yaml's name, independent of which SUBDOMAIN a given invocation
 # uses) — any invocation of this file, catalog or PR sandbox, must pass
-# `--profile lazaretto` or these services never start.
+# `--profile lazzaretto` or these services never start.
 #
 # No database (own SQLite volume, catalog.yaml: needs_db: false).
-# needs_oidc: true — fronted by a PER-SUBDOMAIN oauth2-proxy-lazaretto
+# needs_oidc: true — fronted by a PER-SUBDOMAIN oauth2-proxy-lazzaretto
 # sidecar (infra/edge/oauth2-proxy/compose.yaml, brought up alongside this
 # file with the same SUBDOMAIN/DOMAIN — see that file's own header and
-# QuarantineAl/.github's pr-sandbox-up.yml), closing lazaretto's own
+# QuarantineAl/.github's pr-sandbox-up.yml), closing lazzaretto's own
 # ARCHITECTURE.md-documented "no auth" gap. Both routers below are gated
-# wholesale (no public/admin split like uptime-kuma's — lazaretto has no
+# wholesale (no public/admin split like uptime-kuma's — lazzaretto has no
 # legitimate unauthenticated path), and the backend independently verifies
 # the forwarded ID token itself (AUTH_MODE=required below) as defense in
 # depth. See docs/adding-oidc-to-your-app.md for the full recipe this
-# follows, and lazaretto's own docs/USER_MANAGEMENT_OIDC_ZITADEL.md for the
+# follows, and lazzaretto's own docs/USER_MANAGEMENT_OIDC_ZITADEL.md for the
 # app-side implementation this wires up to.
 
 services:
-  lazaretto-backend:
-    image: ghcr.io/quarantineal/lazaretto-backend:${LAZARETTO_VERSION:-CHANGEME}
-    container_name: quarantine-${SUBDOMAIN:-lazaretto}-backend
+  lazzaretto-backend:
+    image: ghcr.io/quarantineal/lazzaretto-backend:${LAZZARETTO_VERSION:-CHANGEME}
+    container_name: quarantine-${SUBDOMAIN:-lazzaretto}-backend
     restart: unless-stopped
-    profiles: [lazaretto]
+    profiles: [lazzaretto]
     networks:
       - edge
     volumes:
-      - lazaretto-data:/app/data
+      - lazzaretto-data:/app/data
     # Per-instance resource ceilings. These are re-derived from PRODUCTION OOM
     # DATA and replace an earlier set measured on an idle dev host (53 MiB
     # idle, ~173/250 MiB per turn, "four concurrent heavy turns peaked at
     # 999 MiB"). That model was ~2.2x too low and it killed real turns:
-    # quarantine-qualitech-lazaretto-backend recorded oom_kill 5 and hit its
+    # quarantine-qualitech-lazzaretto-backend recorded oom_kill 5 and hit its
     # 1200 MiB ceiling 13,285 times.
     #
     # What the old measurement missed is that it measured turns and nothing
@@ -60,14 +60,14 @@ services:
     #                  base   turns  one heavy tool run       page cache
     #
     # 2700m at the concurrency-4 default below. Full derivation lives in
-    # lazaretto's docs/PER_TENANT_CONTAINER_PLAN.md section 7a;
+    # lazzaretto's docs/PER_TENANT_CONTAINER_PLAN.md section 7a;
     # docs/vm-sizing-and-provisioning.md sizes the HOST these add up on.
     #
-    # provisioners/lazaretto-tenant.sh computes all of these from the tenant's
+    # provisioners/lazzaretto-tenant.sh computes all of these from the tenant's
     # --concurrency (1-2 for a solo tenant, 4 for a team) and overrides every
     # default here; the defaults serve the shared catalog deployment and PR
     # sandboxes, which run at concurrency 4.
-    mem_limit: ${LAZARETTO_MEM_LIMIT:-2700m}
+    mem_limit: ${LAZZARETTO_MEM_LIMIT:-2700m}
     # mem_limit plus an equal amount of swap, stated rather than left to
     # Docker's identical 2x default — because setting this EQUAL to mem_limit
     # is runc's signal to disable swap outright (it writes
@@ -80,7 +80,7 @@ services:
     # turn burns 0.5% CPU, spending ~99.5% of its wall time blocked on API
     # round-trips, so concurrent heaps are cold and evict cheaply. THE VM MUST
     # ACTUALLY HAVE SWAP — see docs/vm-sizing-and-provisioning.md.
-    memswap_limit: ${LAZARETTO_MEMSWAP_LIMIT:-5400m}
+    memswap_limit: ${LAZZARETTO_MEMSWAP_LIMIT:-5400m}
     # Part of the memory budget above, not fairness dressing. Node reads the
     # cgroup CPU quota in os.availableParallelism(), and every JS toolchain an
     # agent might invoke sizes its worker pool from it: jest runs
@@ -90,11 +90,11 @@ services:
     # uses one worker and the heavy-tool term falls from ~640 MiB to ~250 — a
     # larger saving than any plausible increase to mem_limit, and what keeps
     # the "one heavy tool run at a time" assumption honest.
-    cpus: ${LAZARETTO_CPUS:-2}
+    cpus: ${LAZZARETTO_CPUS:-2}
     # Fork-bomb guard: one runaway session should not be able to take the host
     # down with it. Generous next to real usage — a prod container running two
     # turns, two interactive terminals and a full npm test peaked at 129 pids.
-    pids_limit: ${LAZARETTO_PIDS_LIMIT:-1024}
+    pids_limit: ${LAZZARETTO_PIDS_LIMIT:-1024}
     # backend/src/cli-agents/cli-runtime.service.ts spawns every turn with
     # detached:true (its own process group, deliberately, so killTree() can
     # signal the whole tree). `node dist/main` runs as bare PID 1 here with
@@ -111,7 +111,7 @@ services:
     # the missing wait() loop nothing else here was doing.
     init: true
     environment:
-      FRONTEND_ORIGIN: https://${SUBDOMAIN:-lazaretto}.${DOMAIN}
+      FRONTEND_ORIGIN: https://${SUBDOMAIN:-lazzaretto}.${DOMAIN}
       # backend/src/mcp-servers/mcp-oauth-config.ts. This backend's own
       # externally-reachable origin -- NOT FRONTEND_ORIGIN above, which is
       # the frontend's -- used as the redirect_uri sent to a remote MCP
@@ -120,9 +120,9 @@ services:
       # route to, so it's always right for the persistent deployment, every
       # PR sandbox, and every per-tenant instance without any per-invocation
       # override.
-      LAZARETTO_PUBLIC_API_ORIGIN: https://${SUBDOMAIN:-lazaretto}-api.${DOMAIN}
+      LAZZARETTO_PUBLIC_API_ORIGIN: https://${SUBDOMAIN:-lazzaretto}-api.${DOMAIN}
       # backend/src/cli-agents/cli-runtime.service.ts; unset there means 4.
-      CLI_MAX_CONCURRENT: ${LAZARETTO_CLI_MAX_CONCURRENT:-4}
+      CLI_MAX_CONCURRENT: ${LAZZARETTO_CLI_MAX_CONCURRENT:-4}
       # backend/src/cli-agents/cli-runtime.service.ts; unset there means a
       # 5-minute wall-clock timeout per turn, with no allowance for time
       # spent inside the CLI's own retry/backoff on an Anthropic API 429 --
@@ -131,7 +131,7 @@ services:
       # while it was actually just waiting. Raised to 3 hours across every
       # tenant so a turn only dies for genuinely running away, not for
       # absorbing a retry.
-      CLI_TURN_TIMEOUT_MS: ${LAZARETTO_TURN_TIMEOUT_MS:-10800000}
+      CLI_TURN_TIMEOUT_MS: ${LAZZARETTO_TURN_TIMEOUT_MS:-10800000}
       # AES-256-GCM master key for stored credentials (SSH keys, GitHub/npm
       # tokens). Declared in catalog.yaml's generated_secrets and generated
       # once — per app for a manifest deployment, per TENANT for a per-tenant
@@ -140,11 +140,11 @@ services:
       # feature: backend/src/common/secret-crypto.ts validates the format at
       # boot only when set, and the Credentials feature is simply unreachable
       # without it rather than crashing the whole backend.
-      LAZARETTO_CREDENTIALS_KEY: ${LAZARETTO_CREDENTIALS_KEY:-}
+      LAZZARETTO_CREDENTIALS_KEY: ${LAZZARETTO_CREDENTIALS_KEY:-}
       # Deliberately unconditional, not ${SUBDOMAIN}-toggled: this fragment
-      # is only ever invoked behind Traefik + oauth2-proxy-lazaretto (never
+      # is only ever invoked behind Traefik + oauth2-proxy-lazzaretto (never
       # bare local dev, which instead runs `npm run start:dev` + Vite
-      # directly per lazaretto's own docs/USER_MANAGEMENT_OIDC_ZITADEL.md)
+      # directly per lazzaretto's own docs/USER_MANAGEMENT_OIDC_ZITADEL.md)
       # — every invocation, persistent or PR sandbox, gets a forwarded
       # token because forwardAuth gates both routers below unconditionally
       # too. Safe to require auth here without a per-invocation switch.
@@ -152,13 +152,13 @@ services:
       ZITADEL_ISSUER_URL: https://auth.${DOMAIN}
       # The issuer alone is shared by every app in the platform's one Zitadel
       # Project (catalog.yaml: needs_oidc), so the backend also pins `aud` to
-      # its own client id — same value oauth2-proxy-lazaretto already uses,
+      # its own client id — same value oauth2-proxy-lazzaretto already uses,
       # generated by bin/quarantine's OIDC_CLIENT_ID_<APP> wiring off
       # catalog.yaml, never a second credential. Without this, a token
       # verified for a different app on the same Zitadel instance would also
-      # verify here. See lazaretto's docs/USER_MANAGEMENT_OIDC_ZITADEL.md.
-      ZITADEL_CLIENT_ID: ${OIDC_CLIENT_ID_LAZARETTO}
-      # Headless tasks API (docs/headless-api.md in the lazaretto repo).
+      # verify here. See lazzaretto's docs/USER_MANAGEMENT_OIDC_ZITADEL.md.
+      ZITADEL_CLIENT_ID: ${OIDC_CLIENT_ID_LAZZARETTO}
+      # Headless tasks API (docs/headless-api.md in the lazzaretto repo).
       # DELIBERATELY separate from the ZITADEL_ISSUER_URL/ZITADEL_CLIENT_ID
       # pair above, which verify a HUMAN's forwarded ID token: this API is
       # machine-to-machine, so the backend resolves its own issuer/audience
@@ -168,7 +168,7 @@ services:
       ZITADEL_ISSUER: https://auth.${DOMAIN}
       # A client-credentials access token's `aud` is the shared
       # `quarantine-apps` PROJECT id, not any one application's client id --
-      # which is why this cannot reuse OIDC_CLIENT_ID_LAZARETTO above.
+      # which is why this cannot reuse OIDC_CLIENT_ID_LAZZARETTO above.
       #
       # The literal is prod's project id, used as a fallback rather than the
       # value itself: environments/<env>/.env is only rewritten by
@@ -185,7 +185,7 @@ services:
       # front rather than silently degrading to no callback. Shared with n8n,
       # whose own container sees the same value as CALLBACK_STATIC_SECRET
       # (apps/third-party/n8n/compose.yaml). Empty default: an environment
-      # running lazaretto without n8n still boots, it just cannot accept a
+      # running lazzaretto without n8n still boots, it just cannot accept a
       # callback_url.
       CALLBACK_STATIC_SECRET: ${CALLBACK_STATIC_SECRET_N8N:-}
       # Full URL prefixes, comma separated, matched scheme+host exactly then
@@ -201,7 +201,7 @@ services:
       # restructured around a Wait node before it can be tried even once.
       # These are the same three prefixes n8n's own `n8n-public` Traefik
       # router already exposes without SSO (apps/third-party/n8n/compose.yaml),
-      # so this grants lazaretto no reach it did not already have -- it just
+      # so this grants lazzaretto no reach it did not already have -- it just
       # keeps the call on the internal network.
       #
       # Still an allowlist, not a wildcard: scheme+host+port must match
@@ -223,20 +223,20 @@ services:
       start_period: 15s
     labels:
       - traefik.enable=true
-      - traefik.http.services.${SUBDOMAIN:-lazaretto}-backend.loadbalancer.server.port=3031
-      - traefik.http.routers.${SUBDOMAIN:-lazaretto}-api.rule=Host(`${SUBDOMAIN:-lazaretto}-api.${DOMAIN}`)
-      - traefik.http.routers.${SUBDOMAIN:-lazaretto}-api.entrypoints=websecure
-      - traefik.http.routers.${SUBDOMAIN:-lazaretto}-api.tls=true
-      - traefik.http.routers.${SUBDOMAIN:-lazaretto}-api.service=${SUBDOMAIN:-lazaretto}-backend
+      - traefik.http.services.${SUBDOMAIN:-lazzaretto}-backend.loadbalancer.server.port=3031
+      - traefik.http.routers.${SUBDOMAIN:-lazzaretto}-api.rule=Host(`${SUBDOMAIN:-lazzaretto}-api.${DOMAIN}`)
+      - traefik.http.routers.${SUBDOMAIN:-lazzaretto}-api.entrypoints=websecure
+      - traefik.http.routers.${SUBDOMAIN:-lazzaretto}-api.tls=true
+      - traefik.http.routers.${SUBDOMAIN:-lazzaretto}-api.service=${SUBDOMAIN:-lazzaretto}-backend
       # errors outer, auth inner: oauth2-errors must sit outside oauth2-auth
       # so it can catch the 401 forwardAuth short-circuits with — reversed,
       # that 401 would hit the browser directly with no redirect to sign-in
       # (see apps/third-party/uptime-kuma/compose.yaml's identical ordering
       # note). Both sides are ${SUBDOMAIN}-templated: this invocation's own
-      # oauth2-proxy-${SUBDOMAIN:-lazaretto} instance (infra/edge/
+      # oauth2-proxy-${SUBDOMAIN:-lazzaretto} instance (infra/edge/
       # oauth2-proxy/compose.yaml) is what actually answers for THIS
       # router's host, not a fixed shared one.
-      - traefik.http.routers.${SUBDOMAIN:-lazaretto}-api.middlewares=oauth2-errors-${SUBDOMAIN:-lazaretto},oauth2-auth-${SUBDOMAIN:-lazaretto}
+      - traefik.http.routers.${SUBDOMAIN:-lazzaretto}-api.middlewares=oauth2-errors-${SUBDOMAIN:-lazzaretto},oauth2-auth-${SUBDOMAIN:-lazzaretto}
 
       # CORS preflight bypass: a browser's OPTIONS preflight never carries
       # credentials (Fetch spec — true regardless of the real request's own
@@ -245,29 +245,29 @@ services:
       # redirect response to a preflight is something browsers categorically
       # refuse to follow ("Redirect is not allowed for a preflight
       # request"), which fails the *real* request before it's ever sent —
-      # confirmed live: every cross-origin fetch from ${SUBDOMAIN:-lazaretto}.
+      # confirmed live: every cross-origin fetch from ${SUBDOMAIN:-lazzaretto}.
       # ${DOMAIN} to this -api host failed this way. This second router
       # matches OPTIONS specifically and skips both oauth2 middlewares
-      # entirely, going straight to the backend service — lazaretto-backend's
+      # entirely, going straight to the backend service — lazzaretto-backend's
       # own main.ts already calls app.enableCors({..., credentials: true}),
       # it just never got a chance to answer before this router existed.
       # Higher priority than the router above so it wins for OPTIONS on the
       # same host; the actual GET/POST/etc. traffic is untouched and still
       # goes through forwardAuth via that other router.
-      - traefik.http.routers.${SUBDOMAIN:-lazaretto}-api-preflight.rule=Host(`${SUBDOMAIN:-lazaretto}-api.${DOMAIN}`) && Method(`OPTIONS`)
-      - traefik.http.routers.${SUBDOMAIN:-lazaretto}-api-preflight.entrypoints=websecure
-      - traefik.http.routers.${SUBDOMAIN:-lazaretto}-api-preflight.tls=true
-      - traefik.http.routers.${SUBDOMAIN:-lazaretto}-api-preflight.priority=200
-      - traefik.http.routers.${SUBDOMAIN:-lazaretto}-api-preflight.service=${SUBDOMAIN:-lazaretto}-backend
+      - traefik.http.routers.${SUBDOMAIN:-lazzaretto}-api-preflight.rule=Host(`${SUBDOMAIN:-lazzaretto}-api.${DOMAIN}`) && Method(`OPTIONS`)
+      - traefik.http.routers.${SUBDOMAIN:-lazzaretto}-api-preflight.entrypoints=websecure
+      - traefik.http.routers.${SUBDOMAIN:-lazzaretto}-api-preflight.tls=true
+      - traefik.http.routers.${SUBDOMAIN:-lazzaretto}-api-preflight.priority=200
+      - traefik.http.routers.${SUBDOMAIN:-lazzaretto}-api-preflight.service=${SUBDOMAIN:-lazzaretto}-backend
 
       # Headless machine API bypass: /api/v1/tasks* is authenticated by the
       # backend's own HeadlessAuthMiddleware -- a Zitadel machine JWT with
-      # `aud` pinned to OIDC_CLIENT_ID_LAZARETTO plus a required role -- and
+      # `aud` pinned to OIDC_CLIENT_ID_LAZZARETTO plus a required role -- and
       # not by a browser SSO session. forwardAuth gates the routers above
       # wholesale and expects a session cookie, so n8n's client-credentials
       # bearer token gets oauth2-errors' 401->302 to /oauth2/sign_in and
       # never reaches the backend at all: the API is silently unreachable
-      # rather than failing loudly. lazaretto's own docs/headless-api.md
+      # rather than failing loudly. lazzaretto's own docs/headless-api.md
       # names exactly this as the deployment prerequisite that has to be
       # satisfied here, in this repo, because that repo cannot reach it.
       #
@@ -281,11 +281,11 @@ services:
       # leaving HeadlessAuthMiddleware as the sole gate -- the posture
       # docs/headless-api.md documents as the default trusted-network shape.
       # Every other route on this host, and the frontend, keep forwardAuth.
-      - traefik.http.routers.${SUBDOMAIN:-lazaretto}-api-headless.rule=Host(`${SUBDOMAIN:-lazaretto}-api.${DOMAIN}`) && PathPrefix(`/api/v1/tasks`)
-      - traefik.http.routers.${SUBDOMAIN:-lazaretto}-api-headless.entrypoints=websecure
-      - traefik.http.routers.${SUBDOMAIN:-lazaretto}-api-headless.tls=true
-      - traefik.http.routers.${SUBDOMAIN:-lazaretto}-api-headless.priority=250
-      - traefik.http.routers.${SUBDOMAIN:-lazaretto}-api-headless.service=${SUBDOMAIN:-lazaretto}-backend
+      - traefik.http.routers.${SUBDOMAIN:-lazzaretto}-api-headless.rule=Host(`${SUBDOMAIN:-lazzaretto}-api.${DOMAIN}`) && PathPrefix(`/api/v1/tasks`)
+      - traefik.http.routers.${SUBDOMAIN:-lazzaretto}-api-headless.entrypoints=websecure
+      - traefik.http.routers.${SUBDOMAIN:-lazzaretto}-api-headless.tls=true
+      - traefik.http.routers.${SUBDOMAIN:-lazzaretto}-api-headless.priority=250
+      - traefik.http.routers.${SUBDOMAIN:-lazzaretto}-api-headless.service=${SUBDOMAIN:-lazzaretto}-backend
 
       # Auth failures on a browser fetch must stay CORS-readable.
       #
@@ -298,9 +298,9 @@ services:
       # fetch rejects with an opaque CORS error rather than a 401 — the app
       # cannot tell "you are logged out" from "the network died".
       #
-      # Confirmed live against lazaretto-api.dev.quarantine.al: OPTIONS
+      # Confirmed live against lazzaretto-api.dev.quarantine.al: OPTIONS
       # returns 204 with correct CORS headers, an unauthenticated GET returns
-      # 302 with none at all. That is how lazaretto's frontend silently fell
+      # 302 with none at all. That is how lazzaretto's frontend silently fell
       # back to its hardcoded capability table and stopped showing the MCP
       # picker for Ollama, with nothing logged anywhere.
       #
@@ -319,43 +319,43 @@ services:
       #
       # Below the preflight router's 200 so OPTIONS still wins (a preflight
       # also carries Sec-Fetch-Mode: cors), above the plain -api router.
-      - traefik.http.middlewares.${SUBDOMAIN:-lazaretto}-api-cors.headers.customresponseheaders.Access-Control-Allow-Origin=https://${SUBDOMAIN:-lazaretto}.${DOMAIN}
-      - traefik.http.middlewares.${SUBDOMAIN:-lazaretto}-api-cors.headers.customresponseheaders.Access-Control-Allow-Credentials=true
-      - traefik.http.routers.${SUBDOMAIN:-lazaretto}-api-fetch.rule=Host(`${SUBDOMAIN:-lazaretto}-api.${DOMAIN}`) && Header(`Sec-Fetch-Mode`, `cors`)
-      - traefik.http.routers.${SUBDOMAIN:-lazaretto}-api-fetch.entrypoints=websecure
-      - traefik.http.routers.${SUBDOMAIN:-lazaretto}-api-fetch.tls=true
-      - traefik.http.routers.${SUBDOMAIN:-lazaretto}-api-fetch.priority=150
-      - traefik.http.routers.${SUBDOMAIN:-lazaretto}-api-fetch.middlewares=${SUBDOMAIN:-lazaretto}-api-cors,oauth2-auth-${SUBDOMAIN:-lazaretto}
-      - traefik.http.routers.${SUBDOMAIN:-lazaretto}-api-fetch.service=${SUBDOMAIN:-lazaretto}-backend
+      - traefik.http.middlewares.${SUBDOMAIN:-lazzaretto}-api-cors.headers.customresponseheaders.Access-Control-Allow-Origin=https://${SUBDOMAIN:-lazzaretto}.${DOMAIN}
+      - traefik.http.middlewares.${SUBDOMAIN:-lazzaretto}-api-cors.headers.customresponseheaders.Access-Control-Allow-Credentials=true
+      - traefik.http.routers.${SUBDOMAIN:-lazzaretto}-api-fetch.rule=Host(`${SUBDOMAIN:-lazzaretto}-api.${DOMAIN}`) && Header(`Sec-Fetch-Mode`, `cors`)
+      - traefik.http.routers.${SUBDOMAIN:-lazzaretto}-api-fetch.entrypoints=websecure
+      - traefik.http.routers.${SUBDOMAIN:-lazzaretto}-api-fetch.tls=true
+      - traefik.http.routers.${SUBDOMAIN:-lazzaretto}-api-fetch.priority=150
+      - traefik.http.routers.${SUBDOMAIN:-lazzaretto}-api-fetch.middlewares=${SUBDOMAIN:-lazzaretto}-api-cors,oauth2-auth-${SUBDOMAIN:-lazzaretto}
+      - traefik.http.routers.${SUBDOMAIN:-lazzaretto}-api-fetch.service=${SUBDOMAIN:-lazzaretto}-backend
 
-  lazaretto-frontend:
-    image: ghcr.io/quarantineal/lazaretto-frontend:${LAZARETTO_VERSION:-CHANGEME}
-    container_name: quarantine-${SUBDOMAIN:-lazaretto}-frontend
+  lazzaretto-frontend:
+    image: ghcr.io/quarantineal/lazzaretto-frontend:${LAZZARETTO_VERSION:-CHANGEME}
+    container_name: quarantine-${SUBDOMAIN:-lazzaretto}-frontend
     restart: unless-stopped
-    profiles: [lazaretto]
+    profiles: [lazzaretto]
     depends_on:
-      - lazaretto-backend
+      - lazzaretto-backend
     networks:
       - edge
     labels:
       - traefik.enable=true
-      - traefik.http.services.${SUBDOMAIN:-lazaretto}-frontend.loadbalancer.server.port=80
-      - traefik.http.routers.${SUBDOMAIN:-lazaretto}.rule=Host(`${SUBDOMAIN:-lazaretto}.${DOMAIN}`)
-      - traefik.http.routers.${SUBDOMAIN:-lazaretto}.entrypoints=websecure
-      - traefik.http.routers.${SUBDOMAIN:-lazaretto}.tls=true
+      - traefik.http.services.${SUBDOMAIN:-lazzaretto}-frontend.loadbalancer.server.port=80
+      - traefik.http.routers.${SUBDOMAIN:-lazzaretto}.rule=Host(`${SUBDOMAIN:-lazzaretto}.${DOMAIN}`)
+      - traefik.http.routers.${SUBDOMAIN:-lazzaretto}.entrypoints=websecure
+      - traefik.http.routers.${SUBDOMAIN:-lazzaretto}.tls=true
       # Explicit low priority: this router's bare Host() rule would
       # otherwise also match /oauth2/* paths on this host. It must lose to
-      # THIS invocation's own oauth2-proxy-${SUBDOMAIN:-lazaretto} router
+      # THIS invocation's own oauth2-proxy-${SUBDOMAIN:-lazzaretto} router
       # (priority=100, PathPrefix `/oauth2/`, infra/edge/oauth2-proxy/
       # compose.yaml) or sign-in/callback requests would be swallowed here
       # instead.
-      - traefik.http.routers.${SUBDOMAIN:-lazaretto}.priority=10
-      - traefik.http.routers.${SUBDOMAIN:-lazaretto}.middlewares=oauth2-errors-${SUBDOMAIN:-lazaretto},oauth2-auth-${SUBDOMAIN:-lazaretto}
-      - traefik.http.routers.${SUBDOMAIN:-lazaretto}.service=${SUBDOMAIN:-lazaretto}-frontend
+      - traefik.http.routers.${SUBDOMAIN:-lazzaretto}.priority=10
+      - traefik.http.routers.${SUBDOMAIN:-lazzaretto}.middlewares=oauth2-errors-${SUBDOMAIN:-lazzaretto},oauth2-auth-${SUBDOMAIN:-lazzaretto}
+      - traefik.http.routers.${SUBDOMAIN:-lazzaretto}.service=${SUBDOMAIN:-lazzaretto}-frontend
 
 networks:
   edge:
     external: true
 
 volumes:
-  lazaretto-data:
+  lazzaretto-data:

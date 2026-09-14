@@ -321,7 +321,7 @@ qcompose() {
 # lets the caller choose the Compose project name and pass its own `-f`
 # fragments before the subcommand.
 #
-# Needed because a per-tenant Lazaretto instance is its own Compose project
+# Needed because a per-tenant Lazzaretto instance is its own Compose project
 # assembled from just two fragments (the app plus its oauth2-proxy sidecar),
 # NOT from environments/<env>/compose.yaml — bringing that whole graph up
 # under a second project name would start a duplicate Traefik, Postgres and
@@ -332,7 +332,7 @@ qcompose() {
 # actual point of the rule.
 #
 # Variables exported by the caller still win over the --env-file for
-# interpolation, which is how a tenant overrides SUBDOMAIN, LAZARETTO_VERSION
+# interpolation, which is how a tenant overrides SUBDOMAIN, LAZZARETTO_VERSION
 # and the allowlist/limit vars without touching the environment's .env.
 qcompose_scoped() {
   local project="$1" env="$2"; shift 2
@@ -517,7 +517,7 @@ gen_password() {
 }
 
 # gen_hex [bytes=32] — random lowercase hex, 2 chars per byte. For keys that
-# are parsed as hex rather than used as an opaque string: LAZARETTO_CREDENTIALS_KEY
+# are parsed as hex rather than used as an opaque string: LAZZARETTO_CREDENTIALS_KEY
 # is Buffer.from(raw, 'hex') and must decode to exactly 32 bytes, so
 # gen_password's alphanumeric output would silently decode to garbage of the
 # wrong length. `od`, not xxd — xxd ships with vim, which a minimal host need

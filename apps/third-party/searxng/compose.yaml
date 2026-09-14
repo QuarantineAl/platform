@@ -1,6 +1,6 @@
 # apps/third-party/searxng/compose.yaml — internal only (catalog.yaml: searxng)
 #
-# A self-hosted metasearch engine, added for one reason: it gives Lazaretto's
+# A self-hosted metasearch engine, added for one reason: it gives Lazzaretto's
 # Ollama tool loop a web-search tool whose queries never leave this host. The
 # alternatives were a third-party search API (Brave/Tavily — an API key, and
 # every query leaving the infrastructure) or Ollama's hosted web_search
@@ -10,12 +10,12 @@
 #
 # NO TRAEFIK LABELS, ON PURPOSE. Unlike every other app in this catalog this
 # one has no subdomain, no router and no oauth2-proxy: nothing human browses
-# it. Its only client is the MCP search server that Lazaretto spawns, which
+# it. Its only client is the MCP search server that Lazzaretto spawns, which
 # reaches it over the internal `edge` network at
 # http://quarantine-searxng:8080. That is also what makes `limiter: false` in
 # settings.yml safe — see the comment there before adding any Host() rule.
 #
-# One shared instance serves the shared Lazaretto and every per-tenant
+# One shared instance serves the shared Lazzaretto and every per-tenant
 # instance. Search is stateless and SearXNG logs no queries by default, so
 # there is nothing tenant-specific to keep apart here — unlike the per-tenant
 # credentials keys, which very much are.

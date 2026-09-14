@@ -2,7 +2,7 @@
 #
 # Vaultwarden has NATIVE OIDC/SSO support (SSO_ENABLED, current as of the
 # 1.3x series — catalog.yaml: needs_oidc: true, but unlike uptime-kuma/
-# lazaretto the OIDC client this provisions is consumed DIRECTLY by
+# lazzaretto the OIDC client this provisions is consumed DIRECTLY by
 # Vaultwarden itself, never an oauth2-proxy sidecar, and no oauth2-proxy
 # block for this app exists in infra/edge/oauth2-proxy/compose.yaml).
 #

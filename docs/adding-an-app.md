@@ -30,7 +30,7 @@ from happening.
 Uptime Kuma's entry, quoted verbatim from `catalog.yaml`, is the worked
 example to copy from for a single-origin `needs_oidc: true` app (see
 `docs/adding-oidc-to-your-app.md` for the multi-origin shape, worked
-through via the `lazaretto` entry):
+through via the `lazzaretto` entry):
 
 ```yaml
   - name: uptime-kuma
@@ -180,7 +180,7 @@ kind of secret the app needs:
   `needs_oidc: true`; nothing in `bin/quarantine` needs touching. Adding
   matching `CHANGEME-captured-from-zitadel-at-provision-time` placeholder
   lines to `secrets.example.yaml` under `apps.<name>:` (mirroring the
-  lazaretto/uptime-kuma entries) is good practice for documentation, but
+  lazzaretto/uptime-kuma entries) is good practice for documentation, but
   optional — these are **not** `REQUIRED_SECRET_KEYS` members, and the key
   gets created either way. See `docs/adding-oidc-to-your-app.md` for the
   Traefik/oauth2-proxy side of onboarding a `needs_oidc` app (the
