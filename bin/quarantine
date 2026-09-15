@@ -616,6 +616,19 @@ generate_env_file() {
   # tasks API as ZITADEL_AUDIENCE (apps/first-party/lazzaretto/compose.yaml).
   zitadel_project_id="$(secrets_get "$plaintext" '.core.zitadel.project_id')"
 
+  # kujtime's AI-refine job worker's Anthropic key (apps/web/lib/jobs/ai-refine.ts).
+  # Legitimately empty — there is nothing to auto-generate for a real
+  # third-party API key, so this is read directly rather than via
+  # req_secret, the same treatment as github_runner_pat/zitadel_project_id
+  # above: `quarantine init` must succeed without it, since only the
+  # optional "Refine" button depends on it, not the archive/publish path.
+  # See catalog.yaml's kujtime entry for the secrets_edit + restart flow
+  # that sets the real value later. Harmless to print even for an
+  # environment that doesn't run kujtime at all — an unreferenced .env var
+  # is simply never read.
+  local anthropic_api_key_kujtime
+  anthropic_api_key_kujtime="$(secrets_get "$plaintext" '.apps["kujtime"].anthropic_api_key')"
+
   {
     printf 'DOMAIN=%s\n' "$DOMAIN"
     printf 'ACME_EMAIL=%s\n' "$ACME_EMAIL"
@@ -632,6 +645,7 @@ generate_env_file() {
     printf 'ZITADEL_DATABASE_POSTGRES_DSN=postgresql://zitadel:%s@postgres:5432/zitadel?sslmode=disable\n' "$(urlencode "$zitadel_db_password")"
 
     printf 'ZITADEL_PROJECT_ID=%s\n' "$zitadel_project_id"
+    printf 'ANTHROPIC_API_KEY_KUJTIME=%s\n' "$anthropic_api_key_kujtime"
 
     printf 'OAUTH2_PROXY_COOKIE_SECRET=%s\n' "$oauth2_cookie_secret"
 
