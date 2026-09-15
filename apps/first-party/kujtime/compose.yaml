@@ -1,0 +1,89 @@
+# apps/first-party/kujtime/compose.yaml — <city>-kujtime.${DOMAIN}
+# (catalog.yaml: kujtime)
+#
+# ONE container serves every city. Traefik routes by HostRegexp rather than
+# a plain Host() because, unlike lazaretto's per-tenant model (a whole
+# separate container per tenant), Kujtime multiplexes every city through
+# this single service — city_id is a column, not a deployment. Adding a
+# city is a DB row plus `quarantine app add-redirect kujtime <uri>`, never
+# a second catalog entry or a second compose fragment. The unescaped `.`
+# inside `${DOMAIN}` matches any character in the regex — harmless in
+# practice (SNI against the wildcard cert already gates which hosts reach
+# this router at all) but worth flagging so the next reader doesn't file it
+# as a bug.
+#
+# Deliberately NOT behind oauth2-proxy (the Vaultwarden precedent, not the
+# lazaretto one): public article pages must be readable by anonymous
+# visitors and crawlers, and Instagram's Graph API fetches post images from
+# /media over plain public HTTPS — behind forward-auth, Meta's fetcher gets
+# a 302 to a sign-in page and every publish fails. Native OIDC + JWKS
+# verification happens in-app (apps/web/lib/auth) instead.
+#
+# First first-party app on the shared Postgres (needs_db: true) — no other
+# first-party app uses it yet; n8n proves the plumbing in prod, but this is
+# the first first-party consumer.
+
+services:
+  kujtime:
+    image: ghcr.io/quarantineal/kujtime:${KUJTIME_VERSION:-CHANGEME}
+    container_name: quarantine-kujtime
+    restart: unless-stopped
+    profiles: [kujtime]
+    init: true
+    networks:
+      - edge
+    environment:
+      DATABASE_URL: postgres://kujtime:${DATABASE_PASSWORD_KUJTIME}@postgres:5432/kujtime
+      ZITADEL_ISSUER_URL: https://auth.${DOMAIN}
+      ZITADEL_PROJECT_ID: ${ZITADEL_PROJECT_ID}
+      OIDC_CLIENT_ID_KUJTIME: ${OIDC_CLIENT_ID_KUJTIME}
+      OIDC_CLIENT_SECRET_KUJTIME: ${OIDC_CLIENT_SECRET_KUJTIME}
+      KUJTIME_SESSION_SECRET: ${KUJTIME_SESSION_SECRET}
+      # Legitimately empty until an operator runs secrets_edit — see
+      # catalog.yaml's notes for this entry. Only the AI-refine job
+      # worker's optional "Refine" button depends on this.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY_KUJTIME}
+      NEXT_PUBLIC_DOMAIN: ${DOMAIN}
+      KUJTIME_MEDIA_ROOT: /data/media
+    volumes:
+      - kujtime-media:/data/media
+    # node:22-slim carries neither wget nor curl (confirmed — the obvious
+    # copy from qualitech's nginx-based healthcheck silently never
+    # succeeds on this image), so the check shells out to Node itself
+    # rather than pull in an extra apt package.
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "require('http').get('http://127.0.0.1:3000/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    # A10.3 — starting points, not measured production data (this app has
+    # none yet): one container running libvips image processing (A3.4
+    # already serializes to one image at a time in-process) for every
+    # city must not be the unbounded neighbour on the host. Revisit once
+    # real upload/traffic data exists — see lazaretto's own compose
+    # fragment for the shape of that derivation.
+    mem_limit: 768m
+    # Deliberately NOT equal to mem_limit — runc disables swap accounting
+    # entirely when the two match, which silently defeats memswap_limit.
+    memswap_limit: 1024m
+    cpus: 1.5
+    pids_limit: 512
+    labels:
+      - traefik.enable=true
+      - traefik.http.services.kujtime.loadbalancer.server.port=3000
+      - traefik.http.routers.kujtime.rule=HostRegexp(`^[a-z0-9-]+-kujtime\.${DOMAIN}$`) || Host(`kujtime.${DOMAIN}`)
+      - traefik.http.routers.kujtime.entrypoints=websecure
+      - traefik.http.routers.kujtime.tls=true
+      - traefik.http.routers.kujtime.service=kujtime
+
+volumes:
+  kujtime-media:
+
+networks:
+  edge:
+    external: true

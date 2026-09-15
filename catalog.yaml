@@ -297,3 +297,59 @@ apps:
       rule. One shared instance serves the shared Lazzaretto and every
       per-tenant instance: search is stateless and SearXNG logs no queries
       by default, so there is nothing tenant-specific to keep apart.
+
+  - name: kujtime
+    kind: app
+    compose_path: apps/first-party/kujtime/compose.yaml
+    subdomain: kujtime
+    needs_db: true
+    needs_oidc: true
+    # Bootstraps the shared Application with one redirect URI so it's
+    # never empty; NOT where a real city's callback lives. Every actual
+    # city is added afterward with
+    # `quarantine app add-redirect kujtime https://<city>-kujtime.${DOMAIN}/api/auth/callback`
+    # against this SAME Application — cities are DB rows created at
+    # runtime, not catalog entries, so their redirect URIs can't be known
+    # up front and don't belong in this static list.
+    oidc_redirect_uris:
+      - "https://kujtime.${DOMAIN}/api/auth/callback"
+    generated_secrets:
+      # Same reasoning as n8n's db_password entry above: points at the
+      # same secrets.sops.yaml path provisioners/postgres.sh itself writes
+      # (.apps["kujtime"].db_password), env is DATABASE_PASSWORD_KUJTIME
+      # (not a container-facing DB var name directly) for the same
+      # flat-.env collision reasoning n8n's entry documents.
+      - key: db_password
+        env: DATABASE_PASSWORD_KUJTIME
+        generator: alnum32
+      # Encrypts apps/web/lib/auth/session.ts's session cookie (A256GCM,
+      # `dir` alg — 32 raw bytes needed, hence hex32 not alnum32).
+      - key: session_secret
+        env: KUJTIME_SESSION_SECRET
+        generator: hex32
+    notes: >-
+      Multi-city: ONE container serves every city via a HostRegexp router
+      over <city>-kujtime.${DOMAIN}; every city's OIDC callback is added
+      dynamically to the SAME shared Application via `add-redirect` (see
+      oidc_redirect_uris above), never a second catalog entry — the app's
+      own docs/PLAN.md §A5.3 covers why `state` also has to bind the
+      originating host, since one Application can't otherwise tell which
+      city's origin started a given login. Deliberately NOT behind
+      oauth2-proxy (Vaultwarden's precedent, not lazaretto's): public
+      article pages must be anonymously readable, and Instagram's Graph API
+      fetches post images from /media over public HTTPS — native OIDC +
+      JWKS verification happens in-app instead. First first-party app on
+      the shared Postgres (needs_db: true) — n8n above is the only other
+      consumer so far. ANTHROPIC_API_KEY_KUJTIME (used by the AI-refine job
+      worker, apps/web/lib/jobs/ai-refine.ts) is read in
+      bin/quarantine's generate_env_file() directly via secrets_get, the
+      same "legitimately empty" treatment as zitadel_project_id/
+      github_runner_pat right above it — deliberately NOT added to
+      REQUIRED_SECRET_KEYS, so `quarantine init` succeeds without a real
+      key: only the optional Refine button depends on it, not the
+      archive/publish path. Set the real value after this environment's
+      first `quarantine init` with `secrets_edit` (lib/common.sh) →
+      `apps.kujtime.anthropic_api_key`, then `quarantine start` to
+      regenerate .env and pick it up. The Refine button simply fails (job
+      retries with backoff, A2.1) until this is set — nothing else in the
+      app depends on it.
