@@ -27,6 +27,8 @@
 # somebody brought up by hand to debug something. `quarantine status` still
 # lists it and `quarantine destroy` still removes it either way.
 apps:
+  - name: kujtime
+    version: dev
   - name: lazzaretto
     version: dev
   - name: qualitech
