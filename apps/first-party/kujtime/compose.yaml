@@ -30,8 +30,18 @@ services:
     restart: unless-stopped
     profiles: [kujtime]
     init: true
+    # First first-party app on the shared Postgres, so this is the first
+    # compose fragment where the gap actually bit: `edge` alone gets Traefik
+    # routing but not DNS resolution for `postgres` — that hostname only
+    # resolves on the `db` network, which is `internal: true` (no gateway to
+    # the host or public internet, matching infra/data/postgres/compose.yaml's
+    # own reasoning). Confirmed live: without this, migrate.ts's own
+    # connection fails `getaddrinfo EAI_AGAIN postgres`, matching exactly how
+    # zitadel-api (infra/identity/zitadel/compose.yaml) is attached to reach
+    # the same shared instance.
     networks:
       - edge
+      - db
     environment:
       DATABASE_URL: postgres://kujtime:${DATABASE_PASSWORD_KUJTIME}@postgres:5432/kujtime
       ZITADEL_ISSUER_URL: https://auth.${DOMAIN}
@@ -87,3 +97,6 @@ volumes:
 networks:
   edge:
     external: true
+  db:
+    name: quarantine-db
+    internal: true
