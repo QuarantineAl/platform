@@ -44,6 +44,7 @@ include:
   - path: ../../apps/first-party/qualitech/compose.yaml
   - path: ../../apps/first-party/residences/compose.yaml
   - path: ../../apps/first-party/kujtime/compose.yaml
+  - path: ../../apps/first-party/delivery-note-ai/compose.yaml
 
   # --- apps/third-party: profile-gated, one profile per catalog.yaml entry
   - path: ../../apps/third-party/uptime-kuma/compose.yaml
