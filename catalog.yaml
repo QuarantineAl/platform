@@ -371,17 +371,18 @@ apps:
         generator: hex32
     notes: >-
       Delivery note (DDT) OCR + AI extraction POC from QuarantineAl/delivery-note-ai.
-      DEV ONLY — not in prod's manifest and not meant to be. Five containers
-      (web, api, document-ai, mcp, ollama) under one profile; only web is routed,
-      and the whole host is behind oauth2-proxy-delivery-note-ai
+      DEV ONLY — not in prod's manifest and not meant to be. Four containers
+      (web, api, document-ai, mcp) under one profile; only web is routed, and
+      the whole host is behind oauth2-proxy-delivery-note-ai
       (infra/edge/oauth2-proxy/compose.yaml) — the uptime-kuma/n8n single-origin
-      forward-auth shape, no in-app auth, no public path. Uses no shared
+      forward-auth shape, no in-app auth, no public path. The LLM is the team's
+      existing Ollama server (DELIVERY_NOTE_AI_OLLAMA_URL, default
+      http://192.168.1.50:11434, gemma4:12b), not a container here; model pulls
+      from the app are disabled because that server is shared. Uses no shared
       Postgres: SQLite and uploaded files live in the delivery-note-ai-data
-      volume, Ollama models in delivery-note-ai-ollama (~3 GB). Built and
-      deployed by the app repo's own deploy-develop.yml (three images, not the
-      two-image shape of QuarantineAl/.github's reusable deploy-app.yml). The
-      MCP server is on the edge network without a Traefik router, at
-      http://quarantine-delivery-note-ai-mcp:8001/mcp, gated by
-      DELIVERY_NOTE_AI_MCP_TOKEN. Heavy on this 4 vCPU / 8 GB host while
-      extracting (OCR, then a local 2B LLM, each capped at 3 CPUs, never
-      concurrently); idle once Ollama unloads the model.
+      volume. Built and deployed by the app repo's own deploy-develop.yml
+      (three images, not the two-image shape of QuarantineAl/.github's reusable
+      deploy-app.yml). The MCP server is on the edge network without a Traefik
+      router, at http://quarantine-delivery-note-ai-mcp:8001/mcp, gated by
+      DELIVERY_NOTE_AI_MCP_TOKEN. Only OCR runs on this host (capped at 3 CPUs,
+      one document at a time).
