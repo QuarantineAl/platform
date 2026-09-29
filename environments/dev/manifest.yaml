@@ -34,4 +34,6 @@ apps:
   - name: qualitech
     version: dev
   - name: searxng
+  - name: delivery-note-ai
+    version: dev
 observability: false
