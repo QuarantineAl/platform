@@ -14,8 +14,8 @@
 #                router; requires the generated bearer token (DELIVERY_NOTE_AI_MCP_TOKEN).
 #
 # The LLM is NOT hosted here: the app uses the team's existing Ollama server
-# (DELIVERY_NOTE_AI_OLLAMA_URL, default http://192.168.1.50:11434, model gemma4:12b),
-# reached from the app network through the host's routing. Model downloads from the
+# (DELIVERY_NOTE_AI_OLLAMA_URL, default http://ollamam.quarantine.al, model gemma4:e4b),
+# reached over HTTPS/HTTP through Cloudflare like any external API. Model downloads from the
 # app's settings page are disabled (OLLAMA_ALLOW_PULL=false) because that server is
 # shared; pull models on it directly. The URL and models can also be changed at
 # runtime on the settings page.
@@ -68,9 +68,9 @@ services:
     environment:
       DOCUMENT_AI_URL: http://quarantine-delivery-note-ai-document-ai:8000
       DEFAULT_ENGINE: ocr-llm
-      OLLAMA_URL: ${DELIVERY_NOTE_AI_OLLAMA_URL:-http://192.168.1.50:11434}
-      OLLAMA_TEXT_MODEL: gemma4:12b
-      OLLAMA_VISION_MODEL: gemma4:12b
+      OLLAMA_URL: ${DELIVERY_NOTE_AI_OLLAMA_URL:-http://ollamam.quarantine.al}
+      OLLAMA_TEXT_MODEL: gemma4:e4b
+      OLLAMA_VISION_MODEL: gemma4:e4b
     volumes:
       - delivery-note-ai-data:/data
     networks:
@@ -88,9 +88,9 @@ services:
     profiles: [delivery-note-ai]
     init: true
     environment:
-      OLLAMA_URL: ${DELIVERY_NOTE_AI_OLLAMA_URL:-http://192.168.1.50:11434}
-      OLLAMA_TEXT_MODEL: gemma4:12b
-      OLLAMA_VISION_MODEL: gemma4:12b
+      OLLAMA_URL: ${DELIVERY_NOTE_AI_OLLAMA_URL:-http://ollamam.quarantine.al}
+      OLLAMA_TEXT_MODEL: gemma4:e4b
+      OLLAMA_VISION_MODEL: gemma4:e4b
       # Shared Ollama server: never download models onto it from the app.
       OLLAMA_ALLOW_PULL: "false"
       OCR_THREADS: "3"

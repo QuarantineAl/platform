@@ -377,7 +377,7 @@ apps:
       (infra/edge/oauth2-proxy/compose.yaml) — the uptime-kuma/n8n single-origin
       forward-auth shape, no in-app auth, no public path. The LLM is the team's
       existing Ollama server (DELIVERY_NOTE_AI_OLLAMA_URL, default
-      http://192.168.1.50:11434, gemma4:12b), not a container here; model pulls
+      http://ollamam.quarantine.al, gemma4:e4b), not a container here; model pulls
       from the app are disabled because that server is shared. Uses no shared
       Postgres: SQLite and uploaded files live in the delivery-note-ai-data
       volume. Built and deployed by the app repo's own deploy-develop.yml
