@@ -1,0 +1,157 @@
+# apps/first-party/delivery-note-ai/compose.yaml — delivery-note-ai.${DOMAIN}
+# (catalog.yaml: delivery-note-ai)
+#
+# Delivery note (DDT) OCR + extraction POC from QuarantineAl/delivery-note-ai.
+# DEV ONLY: there is no prod deployment of this app.
+#
+# Five containers, one profile:
+#   web          nginx: React build + same-origin proxy of /api to the API. The ONLY
+#                routed service; the whole host sits behind oauth2-proxy-delivery-note-ai
+#                (infra/edge/oauth2-proxy/compose.yaml), i.e. a Zitadel login.
+#   api          NestJS: documents, settings, exports. SQLite + files in a volume.
+#   document-ai  Python: PaddleOCR (PP-OCRv6, ONNX Runtime, CPU) + extraction engines.
+#   mcp          MCP server (agent tools), on the internal edge network only, no Traefik
+#                router; requires the generated bearer token (DELIVERY_NOTE_AI_MCP_TOKEN).
+#   ollama       local LLM runtime. Models live in a volume; document-ai pulls the
+#                configured default on first start (OLLAMA_AUTO_PULL).
+#
+# Service keys are prefixed because every fragment shares one compose project.
+# Internal calls address containers on the app's own network, never the shared edge
+# network, so no other app's aliases can shadow them.
+#
+# Resource caps: this host has 4 vCPU / ~8 GB and no GPU, shared with every other dev
+# app. OCR and LLM inference never run at the same time (document-ai processes one job
+# at a time and calls Ollama synchronously), so their caps overlap by design. Ollama
+# unloads the model after OLLAMA_KEEP_ALIVE, so idle cost is small. A 2B model
+# (qwen3.5:2b, ~2.7 GB) is the default for that reason; see the app's README for
+# measured timings and for pointing OLLAMA_URL at a GPU host instead.
+
+services:
+  delivery-note-ai-web:
+    image: ghcr.io/quarantineal/delivery-note-ai-web:${DELIVERY_NOTE_AI_VERSION:-CHANGEME}
+    container_name: quarantine-delivery-note-ai-web
+    restart: unless-stopped
+    profiles: [delivery-note-ai]
+    environment:
+      API_UPSTREAM: http://quarantine-delivery-note-ai-api:3000
+    networks:
+      - edge
+      - delivery-note-ai
+    depends_on:
+      - delivery-note-ai-api
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    mem_limit: 64m
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=edge
+      - traefik.http.services.delivery-note-ai.loadbalancer.server.port=80
+      - traefik.http.routers.delivery-note-ai.rule=Host(`delivery-note-ai.${DOMAIN}`)
+      - traefik.http.routers.delivery-note-ai.entrypoints=websecure
+      - traefik.http.routers.delivery-note-ai.tls=true
+      # Below oauth2-proxy-delivery-note-ai's /oauth2/ router (priority 100).
+      - traefik.http.routers.delivery-note-ai.priority=1
+      - traefik.http.routers.delivery-note-ai.service=delivery-note-ai
+      - traefik.http.routers.delivery-note-ai.middlewares=oauth2-errors-delivery-note-ai,oauth2-auth-delivery-note-ai
+
+  delivery-note-ai-api:
+    image: ghcr.io/quarantineal/delivery-note-ai-api:${DELIVERY_NOTE_AI_VERSION:-CHANGEME}
+    container_name: quarantine-delivery-note-ai-api
+    restart: unless-stopped
+    profiles: [delivery-note-ai]
+    init: true
+    environment:
+      DOCUMENT_AI_URL: http://quarantine-delivery-note-ai-document-ai:8000
+      DEFAULT_ENGINE: ocr-llm
+      OLLAMA_URL: http://quarantine-delivery-note-ai-ollama:11434
+      OLLAMA_TEXT_MODEL: qwen3.5:2b
+      OLLAMA_VISION_MODEL: qwen3-vl:2b
+    volumes:
+      - delivery-note-ai-data:/data
+    networks:
+      - delivery-note-ai
+    depends_on:
+      - delivery-note-ai-document-ai
+    mem_limit: 384m
+    memswap_limit: 512m
+    cpus: 1
+
+  delivery-note-ai-document-ai:
+    image: ghcr.io/quarantineal/delivery-note-ai-document-ai:${DELIVERY_NOTE_AI_VERSION:-CHANGEME}
+    container_name: quarantine-delivery-note-ai-document-ai
+    restart: unless-stopped
+    profiles: [delivery-note-ai]
+    init: true
+    environment:
+      OLLAMA_URL: http://quarantine-delivery-note-ai-ollama:11434
+      OLLAMA_TEXT_MODEL: qwen3.5:2b
+      OLLAMA_VISION_MODEL: qwen3-vl:2b
+      OLLAMA_AUTO_PULL: qwen3.5:2b
+      OCR_THREADS: "3"
+      OMP_NUM_THREADS: "3"
+    networks:
+      - delivery-note-ai
+    mem_limit: 2g
+    memswap_limit: 2560m
+    cpus: 3
+
+  delivery-note-ai-mcp:
+    image: ghcr.io/quarantineal/delivery-note-ai-document-ai:${DELIVERY_NOTE_AI_VERSION:-CHANGEME}
+    container_name: quarantine-delivery-note-ai-mcp
+    restart: unless-stopped
+    profiles: [delivery-note-ai]
+    init: true
+    command: ["python", "-m", "app.mcp_server"]
+    environment:
+      API_URL: http://quarantine-delivery-note-ai-api:3000/api
+      PUBLIC_URL: https://delivery-note-ai.${DOMAIN}
+      MCP_ALLOWED_HOSTS: quarantine-delivery-note-ai-mcp:8001
+      MCP_TOKEN: ${DELIVERY_NOTE_AI_MCP_TOKEN}
+    # On edge so agents (e.g. Lazzaretto) can reach it at
+    # http://quarantine-delivery-note-ai-mcp:8001/mcp; no Traefik labels, so it is
+    # never exposed publicly.
+    networks:
+      - edge
+      - delivery-note-ai
+    healthcheck:
+      disable: true
+    depends_on:
+      - delivery-note-ai-api
+    mem_limit: 192m
+
+  delivery-note-ai-ollama:
+    image: ollama/ollama:0.35.0
+    container_name: quarantine-delivery-note-ai-ollama
+    restart: unless-stopped
+    profiles: [delivery-note-ai]
+    environment:
+      OLLAMA_NUM_PARALLEL: "1"
+      OLLAMA_MAX_LOADED_MODELS: "1"
+      OLLAMA_KEEP_ALIVE: 10m
+    volumes:
+      - delivery-note-ai-ollama:/root/.ollama
+    networks:
+      - delivery-note-ai
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    mem_limit: 4g
+    memswap_limit: 5g
+    cpus: 3
+
+volumes:
+  delivery-note-ai-data:
+  delivery-note-ai-ollama:
+
+networks:
+  edge:
+    external: true
+  delivery-note-ai:
+    name: quarantine-delivery-note-ai
