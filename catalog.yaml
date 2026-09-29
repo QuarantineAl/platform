@@ -353,3 +353,35 @@ apps:
       regenerate .env and pick it up. The Refine button simply fails (job
       retries with backoff, A2.1) until this is set — nothing else in the
       app depends on it.
+
+  - name: delivery-note-ai
+    kind: app
+    compose_path: apps/first-party/delivery-note-ai/compose.yaml
+    subdomain: delivery-note-ai
+    needs_db: false
+    needs_oidc: true
+    oidc_redirect_uris:
+      - "https://delivery-note-ai.${DOMAIN}/oauth2/callback"
+    generated_secrets:
+      # Bearer token the app's MCP server (reachable only on the internal edge
+      # network) requires from agents. Rotating it is harmless: nothing is
+      # encrypted with it, callers just need the new value.
+      - key: mcp_token
+        env: DELIVERY_NOTE_AI_MCP_TOKEN
+        generator: hex32
+    notes: >-
+      Delivery note (DDT) OCR + AI extraction POC from QuarantineAl/delivery-note-ai.
+      DEV ONLY — not in prod's manifest and not meant to be. Five containers
+      (web, api, document-ai, mcp, ollama) under one profile; only web is routed,
+      and the whole host is behind oauth2-proxy-delivery-note-ai
+      (infra/edge/oauth2-proxy/compose.yaml) — the uptime-kuma/n8n single-origin
+      forward-auth shape, no in-app auth, no public path. Uses no shared
+      Postgres: SQLite and uploaded files live in the delivery-note-ai-data
+      volume, Ollama models in delivery-note-ai-ollama (~3 GB). Built and
+      deployed by the app repo's own deploy-develop.yml (three images, not the
+      two-image shape of QuarantineAl/.github's reusable deploy-app.yml). The
+      MCP server is on the edge network without a Traefik router, at
+      http://quarantine-delivery-note-ai-mcp:8001/mcp, gated by
+      DELIVERY_NOTE_AI_MCP_TOKEN. Heavy on this 4 vCPU / 8 GB host while
+      extracting (OCR, then a local 2B LLM, each capped at 3 CPUs, never
+      concurrently); idle once Ollama unloads the model.
