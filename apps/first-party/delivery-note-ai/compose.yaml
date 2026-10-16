@@ -25,7 +25,8 @@
 # network, so no other app's aliases can shadow them.
 #
 # Resource caps: this host has 4 vCPU / ~8 GB and no GPU, shared with every other dev
-# app. Only OCR runs here (PaddleOCR, ~1-2 s per page, one job at a time).
+# app. Only OCR runs here (PaddleOCR, ~1-2 s per page, one job at a time). document-ai
+# is the largest ceiling (4 GB): OCR on large phone photos needs it.
 
 services:
   delivery-note-ai-web:
@@ -97,8 +98,12 @@ services:
       OMP_NUM_THREADS: "3"
     networks:
       - delivery-note-ai
-    mem_limit: 2g
-    memswap_limit: 2560m
+    # OCR peak memory, measured on this host 2026-10-16 (delivery-note-ai ROADMAP step 3):
+    # one 2-page 2283x3143 phone photo already peaks at 2.7 GB, and a long-running
+    # process with page straightening (OCR_DESKEW) reaches 3.5 GB. 2 GB + 512 MB swap
+    # was OOM-killed on that photo. Swap stays 512 MB above the limit.
+    mem_limit: 4g
+    memswap_limit: 4608m
     cpus: 3
 
   delivery-note-ai-mcp:
