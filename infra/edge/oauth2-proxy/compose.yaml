@@ -542,6 +542,54 @@ services:
       - traefik.http.middlewares.oauth2-errors-delivery-note-ai.errors.query=/oauth2/sign_in?rd={url}
       - traefik.http.middlewares.oauth2-errors-delivery-note-ai.errors.statusRewrites.401=302
 
+  # bem: single-origin, never PR-sandboxed — the delivery-note-ai block above
+  # under the bem-poc host. The whole host is gated (UI, /api, Swagger): the app
+  # has no auth of its own and its BEMs can be commercially sensitive.
+  oauth2-proxy-bem:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.3
+    container_name: quarantine-oauth2-proxy-bem
+    restart: unless-stopped
+    profiles: [bem]
+    environment:
+      OAUTH2_PROXY_PROVIDER: oidc
+      OAUTH2_PROXY_OIDC_ISSUER_URL: https://auth.${DOMAIN}
+      OAUTH2_PROXY_CLIENT_ID: ${OIDC_CLIENT_ID_BEM}
+      OAUTH2_PROXY_CLIENT_SECRET: ${OIDC_CLIENT_SECRET_BEM}
+      OAUTH2_PROXY_COOKIE_SECRET: ${OAUTH2_PROXY_COOKIE_SECRET}
+      # Host-only cookie (no COOKIE_DOMAINS), but still a unique name so it can
+      # never collide with Lazzaretto's parent-domain cookie in one header.
+      OAUTH2_PROXY_COOKIE_NAME: _oauth2_proxy_bem
+      OAUTH2_PROXY_EMAIL_DOMAINS: "*"
+      OAUTH2_PROXY_REVERSE_PROXY: "true"
+      OAUTH2_PROXY_HTTP_ADDRESS: 0.0.0.0:4180
+      OAUTH2_PROXY_UPSTREAMS: static://202
+      OAUTH2_PROXY_REDIRECT_URL: https://bem-poc.${DOMAIN}/oauth2/callback
+      OAUTH2_PROXY_SET_XAUTHREQUEST: "true"
+      OAUTH2_PROXY_SKIP_PROVIDER_BUTTON: "true"
+      # Pure access control, same reasoning as oauth2-proxy-n8n: nothing
+      # downstream reads or verifies the forwarded token.
+      OAUTH2_PROXY_SCOPE: "openid email profile"
+    networks:
+      - edge
+    # No healthcheck — same reasoning as oauth2-proxy-uptime-kuma above.
+    labels:
+      - traefik.enable=true
+      - traefik.http.services.oauth2-proxy-bem.loadbalancer.server.port=4180
+
+      - traefik.http.routers.oauth2-proxy-bem.rule=Host(`bem-poc.${DOMAIN}`) && PathPrefix(`/oauth2/`)
+      - traefik.http.routers.oauth2-proxy-bem.entrypoints=websecure
+      - traefik.http.routers.oauth2-proxy-bem.tls=true
+      - traefik.http.routers.oauth2-proxy-bem.priority=100
+      - traefik.http.routers.oauth2-proxy-bem.service=oauth2-proxy-bem
+
+      - traefik.http.middlewares.oauth2-auth-bem.forwardauth.address=http://quarantine-oauth2-proxy-bem:4180/oauth2/auth
+      - traefik.http.middlewares.oauth2-auth-bem.forwardauth.trustForwardHeader=true
+      - traefik.http.middlewares.oauth2-auth-bem.forwardauth.authResponseHeaders=X-Auth-Request-User,X-Auth-Request-Email,X-Auth-Request-Groups
+
+      - traefik.http.middlewares.oauth2-errors-bem.errors.status=401-403
+      - traefik.http.middlewares.oauth2-errors-bem.errors.service=oauth2-proxy-bem
+      - traefik.http.middlewares.oauth2-errors-bem.errors.query=/oauth2/sign_in?rd={url}
+      - traefik.http.middlewares.oauth2-errors-bem.errors.statusRewrites.401=302
 
   oauth2-proxy-docs:
     image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.3
