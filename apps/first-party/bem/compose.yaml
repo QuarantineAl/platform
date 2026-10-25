@@ -1,0 +1,108 @@
+# apps/first-party/bem/compose.yaml — bem-poc.${DOMAIN}
+# (catalog.yaml: bem)
+#
+# BEM (bolla di entrata merci) reading POC from QuarantineAl/bem: an API that reads a goods
+# receipt and returns its values, a confidence for each value and whether a person must check
+# it, with a small web app on top. Cut down from delivery-note-ai (same shape, BEM only).
+# DEV ONLY: there is no prod deployment of this app.
+#
+# Three containers, one profile:
+#   web          nginx: React build + same-origin proxy of /api to the API. The ONLY
+#                routed service; the whole host sits behind oauth2-proxy-bem
+#                (infra/edge/oauth2-proxy/compose.yaml), i.e. a Zitadel login.
+#   api          NestJS: documents, the review, OpenAPI. SQLite + files in a volume.
+#   document-ai  Python: PaddleOCR (PP-OCRv6, ONNX Runtime, CPU), the BEM prompt to Ollama,
+#                the checks and the confidence.
+#
+# The LLM is NOT hosted here: the app uses the team's existing Ollama server
+# (BEM_OLLAMA_URL, default http://ollamam.quarantine.al) with qwen3.5:9b, falling back to
+# gemma4:e4b when the server lacks it. The models must already be on that server; the app
+# never pulls them. The URL and both models can be overridden from the environment.
+#
+# Service keys are prefixed because every fragment shares one compose project.
+# Internal calls address containers on the app's own network, never the shared edge
+# network, so no other app's aliases can shadow them.
+#
+# Resource caps: this host is shared with every other dev app and has no GPU. Only OCR
+# runs here (one document at a time). document-ai is the largest ceiling (4 GB): OCR on
+# large phone photos needs it (measured for delivery-note-ai on this host, 2026-10-16).
+
+services:
+  bem-web:
+    image: ghcr.io/quarantineal/bem-web:${BEM_VERSION:-CHANGEME}
+    container_name: quarantine-bem-web
+    restart: unless-stopped
+    profiles: [bem]
+    environment:
+      API_UPSTREAM: http://quarantine-bem-api:3000
+    networks:
+      - edge
+      - bem
+    depends_on:
+      - bem-api
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    mem_limit: 64m
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=edge
+      - traefik.http.services.bem.loadbalancer.server.port=80
+      - traefik.http.routers.bem.rule=Host(`bem-poc.${DOMAIN}`)
+      - traefik.http.routers.bem.entrypoints=websecure
+      - traefik.http.routers.bem.tls=true
+      # Below oauth2-proxy-bem's /oauth2/ router (priority 100).
+      - traefik.http.routers.bem.priority=1
+      - traefik.http.routers.bem.service=bem
+      - traefik.http.routers.bem.middlewares=oauth2-errors-bem,oauth2-auth-bem
+
+  bem-api:
+    image: ghcr.io/quarantineal/bem-api:${BEM_VERSION:-CHANGEME}
+    container_name: quarantine-bem-api
+    restart: unless-stopped
+    profiles: [bem]
+    init: true
+    environment:
+      DOCUMENT_AI_URL: http://quarantine-bem-document-ai:8000
+    volumes:
+      - bem-data:/data
+    networks:
+      - bem
+    depends_on:
+      - bem-document-ai
+    mem_limit: 256m
+    memswap_limit: 384m
+    cpus: 1
+
+  bem-document-ai:
+    image: ghcr.io/quarantineal/bem-document-ai:${BEM_VERSION:-CHANGEME}
+    container_name: quarantine-bem-document-ai
+    restart: unless-stopped
+    profiles: [bem]
+    init: true
+    environment:
+      OLLAMA_URL: ${BEM_OLLAMA_URL:-http://ollamam.quarantine.al}
+      OLLAMA_TEXT_MODEL: ${BEM_OLLAMA_TEXT_MODEL:-qwen3.5:9b}
+      OLLAMA_FALLBACK_MODEL: ${BEM_OLLAMA_FALLBACK_MODEL:-gemma4:e4b}
+      OCR_THREADS: "3"
+      OMP_NUM_THREADS: "3"
+    networks:
+      - bem
+    # OCR peak memory: one 2-page phone photo peaks at 2.7 GB and a long-running process
+    # with page straightening reaches 3.5 GB; 2 GB + 512 MB swap was OOM-killed on that
+    # photo (delivery-note-ai, same OCR). Swap stays 512 MB above the limit.
+    mem_limit: 4g
+    memswap_limit: 4608m
+    cpus: 3
+
+volumes:
+  bem-data:
+
+networks:
+  edge:
+    external: true
+  bem:
+    name: quarantine-bem
