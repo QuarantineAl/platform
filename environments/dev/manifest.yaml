@@ -36,6 +36,8 @@ apps:
   - name: searxng
   - name: delivery-note-ai
     version: dev
+  - name: bem
+    version: dev
   - name: docs
     version: dev
 observability: false
