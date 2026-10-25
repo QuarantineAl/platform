@@ -1,0 +1,48 @@
+# apps/first-party/docs/compose.yaml — docs.${DOMAIN}
+# (catalog.yaml: docs)
+#
+# The QuarantineAl knowledge base from QuarantineAl/docs: a static Astro
+# Starlight site served by nginx. The image carries the whole site, built from
+# every repository listed in that repo's sources.yaml, so there is no volume,
+# no database and nothing to configure here.
+#
+# The whole host is behind oauth2-proxy-docs
+# (infra/edge/oauth2-proxy/compose.yaml): the uptime-kuma/n8n single-origin
+# forward-auth shape, no public path. Any authenticated Zitadel user may read
+# it, so the site's own authoring rules forbid secrets on any page.
+#
+# Built and deployed by QuarantineAl/docs's own deploy.yml, which tags each
+# image with a hash of every source commit and only redeploys when that
+# changes.
+
+services:
+  docs:
+    image: ghcr.io/quarantineal/docs:${DOCS_VERSION:-CHANGEME}
+    container_name: quarantine-docs
+    restart: unless-stopped
+    profiles: [docs]
+    networks:
+      - edge
+    # nginx:alpine ships busybox wget; /healthz is served by the image's own
+    # nginx config (QuarantineAl/docs docker/nginx.conf).
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    mem_limit: 64m
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=edge
+      - traefik.http.services.docs.loadbalancer.server.port=8080
+      - traefik.http.routers.docs.rule=Host(`docs.${DOMAIN}`)
+      - traefik.http.routers.docs.entrypoints=websecure
+      - traefik.http.routers.docs.tls=true
+      - traefik.http.routers.docs.priority=1
+      - traefik.http.routers.docs.service=docs
+      - traefik.http.routers.docs.middlewares=oauth2-errors-docs,oauth2-auth-docs
+
+networks:
+  edge:
+    external: true
