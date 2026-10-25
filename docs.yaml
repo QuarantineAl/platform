@@ -1,0 +1,7 @@
+# Published to the QuarantineAl knowledge base (QuarantineAl/docs).
+section: platform
+slug: platform
+title: Platform
+description: The quarantine CLI, the shared infrastructure every app runs on, and how to operate it.
+order: 0
+dir: docs/site
