@@ -77,7 +77,19 @@ services:
       LABELS: ${RUNNER_LABELS:-self-hosted,quarantine-dev}
       RUNNER_WORKDIR: /srv/quarantine-runner-work
       EPHEMERAL: "true"
-      DISABLE_AUTO_UPDATE: "true"
+      # No DISABLE_AUTO_UPDATE on purpose: let the runner update itself.
+      # GitHub retires old runner versions, and a retired one restarts
+      # forever with "Runner version vX is deprecated and cannot receive
+      # messages", so no job runs. `:latest` doesn't help on its own,
+      # because the image is only fetched on a manual pull and the
+      # ephemeral container restarts from the same image after every job.
+      # That's what broke dev and prod in November 2026, with images
+      # months old. Updating costs a short download before a job when the
+      # image is behind; pulling a fresh image and recreating the runner
+      # removes that cost:
+      #   qcompose <env> pull runner && qcompose <env> up -d --no-deps runner
+      # Don't set it to "false" either: the image's entrypoint turns updates
+      # off whenever the variable is set at all.
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /srv/quarantine-runner-work:/srv/quarantine-runner-work
@@ -131,7 +143,7 @@ services:
       LABELS: ${RUNNER_LABELS:-self-hosted,quarantine-dev}
       RUNNER_WORKDIR: /srv/quarantine-runner-platform-deploy-work
       EPHEMERAL: "true"
-      DISABLE_AUTO_UPDATE: "true"
+      # Updates itself, same as `runner` above (see its comment).
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /srv/quarantine-runner-platform-deploy-work:/srv/quarantine-runner-platform-deploy-work
