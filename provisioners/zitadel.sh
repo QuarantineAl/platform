@@ -455,10 +455,23 @@ org_id="$(printf '%s' "$whoami_response" | yq -p json '.user.details.resourceOwn
 # environment. The modes that genuinely need a project id — the redirect and
 # role modes, plus user-grant/user-revoke, which grant a role that only
 # exists on a project — call this explicitly.
+#
+# projectRoleAssertion ("Assert Roles on Authentication") is NOT Zitadel's
+# default, and without it no token carries the project's roles, even with
+# the urn:zitadel:iam:org:projects:roles scope and idTokenRoleAssertion on
+# the Application. A role an app reads from a person's ID token (like
+# lazzaretto-admin) then silently reads as absent: the grant exists, the
+# user signs in fine, and the app just never sees it.
+#
+# Found live: dev had it on (flipped by hand at some point), prod had it off,
+# so lazzaretto-admin worked on dev and did nothing on prod, with nothing in
+# either log to say why. It's set on create, and healed on an existing
+# project by the modes that make roles matter (ensure and the grant modes),
+# so the two environments can't drift apart again.
 project_id=""
 ensure_project_id() {
   [[ -n "$project_id" ]] && return 0
-  local list_proj_body list_proj_response create_proj_body create_proj_response
+  local list_proj_body list_proj_response create_proj_body create_proj_response role_assertion
   list_proj_body="$(printf '{"filters":[{"projectNameFilter":{"projectName":"%s"}},{"organizationIdFilter":{"organizationId":"%s"}}]}' "$PROJECT_NAME" "$org_id")"
   list_proj_response="$(zitadel_call POST /zitadel.project.v2.ProjectService/ListProjects "$list_proj_body")" \
     || die "failed to list Zitadel projects"
@@ -466,13 +479,24 @@ ensure_project_id() {
 
   if [[ -z "$project_id" || "$project_id" == "null" ]]; then
     log "creating Zitadel project '${PROJECT_NAME}'"
-    create_proj_body="$(printf '{"organizationId":"%s","name":"%s"}' "$org_id" "$PROJECT_NAME")"
+    create_proj_body="$(printf '{"organizationId":"%s","name":"%s","projectRoleAssertion":true}' "$org_id" "$PROJECT_NAME")"
     create_proj_response="$(zitadel_call POST /zitadel.project.v2.ProjectService/CreateProject "$create_proj_body")" \
       || die "failed to create Zitadel project '${PROJECT_NAME}'"
     project_id="$(printf '%s' "$create_proj_response" | yq -p json '.projectId')"
     [[ -n "$project_id" && "$project_id" != "null" ]] || die "CreateProject did not return a projectId: ${create_proj_response}"
   else
     log "using existing Zitadel project '${PROJECT_NAME}' (${project_id})"
+    case "$MODE" in
+      ensure|user-grant|machine-grant)
+        role_assertion="$(printf '%s' "$list_proj_response" | yq -p json '.projects[0].projectRoleAssertion // false')"
+        if [[ "$role_assertion" != "true" ]]; then
+          log "turning on projectRoleAssertion for '${PROJECT_NAME}' (${project_id}): without it no token carries the project's roles"
+          zitadel_call POST /zitadel.project.v2.ProjectService/UpdateProject \
+            "$(printf '{"projectId":"%s","projectRoleAssertion":true}' "$project_id")" >/dev/null \
+            || die "failed to turn on projectRoleAssertion for Zitadel project '${PROJECT_NAME}'"
+        fi
+        ;;
+    esac
   fi
 }
 
