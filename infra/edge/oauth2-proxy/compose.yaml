@@ -404,7 +404,7 @@ services:
       #     for the specific fetcher observed live, which is not guaranteed
       #     to send Sec-Purpose
       # — and routes it to noop@internal (a real Traefik-internal service;
-      # see traefik/compose.yaml's own use of `service=api@internal` for
+      # see traefik/compose.yaml's own use of `service=noop@internal` for
       # the same @internal-reference pattern) instead of oauth2-proxy, so
       # the code is never touched. noop@internal always answers 418 (its
       # fixed, non-configurable response — traefik/traefik#9759): harmless

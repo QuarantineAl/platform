@@ -66,16 +66,21 @@ services:
       start_period: 10s
     labels:
       - traefik.enable=true
-      # Requests the wildcard cert once at startup; no public router is
-      # created for the dashboard itself (kept unexposed by default — see
-      # docs/architecture.md for how to front it with oauth2-proxy).
+      # Requests the wildcard cert once at startup. A router needs a
+      # service, and this one used to be api@internal, which served the
+      # dashboard and API unauthenticated on the bare apex. It now answers
+      # 418 from noop@internal instead, so the dashboard really is
+      # unexposed by default (see docs/architecture.md for how to front it
+      # with oauth2-proxy). Priority 1 lets any app that claims the apex
+      # (apps/first-party/website) take it without further coordination.
       - traefik.http.routers.quarantine-wildcard-cert.rule=Host(`${DOMAIN}`)
+      - traefik.http.routers.quarantine-wildcard-cert.priority=1
       - traefik.http.routers.quarantine-wildcard-cert.entrypoints=websecure
       - traefik.http.routers.quarantine-wildcard-cert.tls=true
       - traefik.http.routers.quarantine-wildcard-cert.tls.certresolver=letsencrypt
       - traefik.http.routers.quarantine-wildcard-cert.tls.domains[0].main=${DOMAIN}
       - traefik.http.routers.quarantine-wildcard-cert.tls.domains[0].sans=*.${DOMAIN}
-      - traefik.http.routers.quarantine-wildcard-cert.service=api@internal
+      - traefik.http.routers.quarantine-wildcard-cert.service=noop@internal
 
 networks:
   edge:
