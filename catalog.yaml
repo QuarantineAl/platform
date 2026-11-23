@@ -431,3 +431,17 @@ apps:
       No database, no volume, no secrets beyond the OIDC client. Built and
       deployed by the docs repo's own deploy.yml, every 30 minutes and on
       merge, redeploying only when a source commit changed.
+
+  - name: website
+    kind: app
+    compose_path: apps/first-party/website/compose.yaml
+    subdomain: www
+    needs_db: false
+    needs_oidc: false
+    notes: >-
+      The public site from QuarantineAl/website: static Astro served by
+      unprivileged nginx. Routed on the bare apex (${DOMAIN}) as well as
+      www, with an explicit router priority over traefik's own
+      wildcard-cert router on the same host. Public by design, so it is not
+      behind oauth2-proxy and carries no secrets. Deployed by that repo's
+      deploy.yml on the prod runner.

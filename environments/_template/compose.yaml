@@ -41,6 +41,7 @@ include:
 
   # --- apps/first-party: profile-gated, one profile per catalog.yaml entry
   - path: ../../apps/first-party/lazzaretto/compose.yaml
+  - path: ../../apps/first-party/website/compose.yaml
   - path: ../../apps/first-party/qualitech/compose.yaml
   - path: ../../apps/first-party/residences/compose.yaml
   - path: ../../apps/first-party/kujtime/compose.yaml
