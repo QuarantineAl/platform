@@ -240,3 +240,7 @@ next deploy's `git pull` will conflict with it.
   how to size an Incus VM for this platform, how to grow one that already
   exists (it needs a stop/start — memory cannot be hot-added), and the guest
   setup every VM needs. Read it before adding tenants to a host.
+
+## License
+
+[Apache License 2.0](LICENSE).
