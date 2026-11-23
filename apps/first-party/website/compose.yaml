@@ -1,0 +1,56 @@
+# apps/first-party/website/compose.yaml — ${DOMAIN} and www.${DOMAIN}
+# (catalog.yaml: website)
+#
+# The public site from QuarantineAl/website: a static Astro build served by
+# unprivileged nginx on :8080. No database, no OIDC, no volume: the image
+# carries the whole site.
+#
+# This is the only app routed on the bare apex. Its router carries an
+# explicit priority above traefik's own `quarantine-wildcard-cert` router
+# (infra/edge/traefik/compose.yaml), which matches the same Host(`${DOMAIN}`)
+# only to request the wildcard certificate and otherwise answers 418 from
+# noop@internal. Without this app in the manifest the apex stays on that
+# 418; with it, the site wins.
+#
+# www is served too rather than redirected: until the apex resolves to this
+# host's Traefik, a www -> apex redirect would bounce visitors away from the
+# only hostname that works. The page's canonical link already points at the
+# apex, so search engines consolidate on it either way. Add a redirectregex
+# middleware here once the apex is live.
+#
+# Built and deployed by QuarantineAl/website's own deploy.yml, which brings
+# up the commit SHA it just pushed rather than the moving :prod tag.
+
+services:
+  website:
+    image: ghcr.io/quarantineal/website:${WEBSITE_VERSION:-CHANGEME}
+    container_name: quarantine-website
+    restart: unless-stopped
+    profiles: [website]
+    networks:
+      - edge
+    read_only: true
+    tmpfs:
+      - /tmp
+    # nginx-unprivileged ships busybox wget; /healthz is served by the image's
+    # own nginx config (QuarantineAl/website docker/nginx.conf).
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    mem_limit: 64m
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=edge
+      - traefik.http.services.website.loadbalancer.server.port=8080
+      - traefik.http.routers.website.rule=Host(`${DOMAIN}`) || Host(`www.${DOMAIN}`)
+      - traefik.http.routers.website.entrypoints=websecure
+      - traefik.http.routers.website.tls=true
+      - traefik.http.routers.website.priority=100
+      - traefik.http.routers.website.service=website
+
+networks:
+  edge:
+    external: true

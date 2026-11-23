@@ -24,3 +24,5 @@ apps:
     version: prod
   - name: searxng
   - name: n8n
+  - name: website
+    version: prod
