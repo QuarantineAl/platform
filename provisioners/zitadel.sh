@@ -29,6 +29,17 @@
 #       on every `quarantine start` (self-healing if ever flipped back via
 #       Console) rather than once, matching every other provisioner here.
 #
+#   provisioners/zitadel.sh signup-status <repo_root> <env> <plaintext_secrets_file>
+#   provisioners/zitadel.sh signup-set    <repo_root> <env> <plaintext_secrets_file> on|off
+#       Self sign-up (the Register button on the login page). It is one
+#       switch for the whole instance: `allowRegister` on the instance's
+#       default login policy. signup-status prints it, and whether our org
+#       uses that default (if the org has its own policy, the default does
+#       nothing for it). signup-set changes only that field: the PUT
+#       replaces the whole policy, so it sends back what it read, then
+#       re-reads and dies if anything else changed. Called by
+#       `quarantine signup`; see docs/site/guides/users/self-sign-up.md.
+#
 #   provisioners/zitadel.sh add-redirect <repo_root> <env> <plaintext_secrets_file> <canonical_name> <redirect_uri>
 #   provisioners/zitadel.sh remove-redirect <repo_root> <env> <plaintext_secrets_file> <canonical_name> <redirect_uri>
 #       Shared-Application mode: add or remove one redirect URI (and its
@@ -208,7 +219,7 @@ require_cmd docker sops yq flock
 # --- mode + argument parsing -------------------------------------------------
 MODE="ensure"
 case "${1:-}" in
-  add-redirect|remove-redirect|list-redirects|ensure-features| \
+  add-redirect|remove-redirect|list-redirects|ensure-features|signup-status|signup-set| \
   user-add|user-list|user-show|user-remove|user-invite|user-grant|user-revoke| \
   app-add-role|app-list-roles| \
   machine-add|machine-list|machine-show|machine-remove|machine-grant|machine-revoke)
@@ -217,6 +228,7 @@ esac
 
 redirect_uri="" name="" email="" role="" role_display_name="" role_group=""
 given_name="" family_name="" list_query="" username="" machine_display_name=""
+signup_want=""
 want_json=false want_invite=false want_password_stdin=false
 
 # Every mode except the two that predate this block takes the same three
@@ -233,6 +245,17 @@ case "$MODE" in
   ensure-features)
     [[ $# -eq 3 ]] || die "usage: provisioners/zitadel.sh ensure-features <repo_root> <env> <plaintext_secrets_file>"
     repo_root="$1" env="$2" plaintext_file="$3" ;;
+  signup-status)
+    [[ $# -eq 3 ]] || die "usage: provisioners/zitadel.sh signup-status <repo_root> <env> <plaintext_secrets_file>"
+    repo_root="$1" env="$2" plaintext_file="$3" ;;
+  signup-set)
+    [[ $# -eq 4 ]] || die "usage: provisioners/zitadel.sh signup-set <repo_root> <env> <plaintext_secrets_file> on|off"
+    repo_root="$1" env="$2" plaintext_file="$3"
+    case "$4" in
+      on) signup_want=true ;;
+      off) signup_want=false ;;
+      *) die "signup-set: expected 'on' or 'off', got '$4'" ;;
+    esac ;;
   add-redirect|remove-redirect)
     [[ $# -eq 5 ]] || die "usage: provisioners/zitadel.sh ${MODE} <repo_root> <env> <plaintext_secrets_file> <canonical_name> <redirect_uri>"
     repo_root="$1" env="$2" plaintext_file="$3" name="$4" redirect_uri="$5"
@@ -457,6 +480,73 @@ if [[ "$MODE" == "ensure-features" ]]; then
   log "ensuring Zitadel instance feature loginV2.required is disabled (Console's own OIDC redirect into Login V2 loses the authRequest context and dead-ends — zitadel/zitadel#10526, #11134, #11142; the legacy UI doesn't have this problem)"
   zitadel_call PUT /v2/features/instance '{"loginV2":{"required":false}}' >/dev/null \
     || die "failed to set Zitadel instance feature loginV2.required=false"
+  exit 0
+fi
+
+# =============================================================================
+# signup-status / signup-set: self sign-up, instance-wide. Like
+# ensure-features, these exit here and never touch projects or apps.
+# =============================================================================
+
+# The instance default login policy, as JSON. Zitadel leaves false booleans
+# out of its JSON, so a missing allowRegister means off.
+signup_read_policy() {
+  local resp
+  resp="$(zitadel_call GET /admin/v1/policies/login)" \
+    || die "failed to read the instance login policy (GET /admin/v1/policies/login): ${resp:-no response}"
+  printf '%s' "$resp" | yq -p json -o json -I0 '.policy'
+}
+
+signup_print_status() {
+  local policy="$1" org_resp is_default
+  if [[ "$(printf '%s' "$policy" | yq -p json '.allowRegister == true')" == "true" ]]; then
+    echo "sign-up: on"
+  else
+    echo "sign-up: off"
+  fi
+  org_resp="$(zitadel_call GET /management/v1/policies/login)" \
+    || die "failed to read our org's login policy (GET /management/v1/policies/login): ${org_resp:-no response}"
+  is_default="$(printf '%s' "$org_resp" | yq -p json '.policy.isDefault == true')"
+  if [[ "$is_default" == "true" ]]; then
+    echo "org uses the instance default: yes"
+  else
+    echo "org uses the instance default: no"
+    warn "our org has its own login policy, so the instance switch does not apply to it (its own allowRegister: $(printf '%s' "$org_resp" | yq -p json '.policy.allowRegister == true'))"
+  fi
+}
+
+if [[ "$MODE" == "signup-status" ]]; then
+  policy="$(signup_read_policy)"
+  signup_print_status "$policy"
+  exit 0
+fi
+
+if [[ "$MODE" == "signup-set" ]]; then
+  before="$(signup_read_policy)"
+  if [[ "$(printf '%s' "$before" | yq -p json '.allowRegister == true')" == "$signup_want" ]]; then
+    log "sign-up is already $([[ "$signup_want" == true ]] && echo on || echo off) — nothing to change"
+    signup_print_status "$before"
+    exit 0
+  fi
+  # The PUT replaces the whole policy. Send back what we read, minus the
+  # read-only fields and the lists that have their own endpoints, with
+  # only allowRegister changed.
+  body="$(printf '%s' "$before" | yq -p json -o json -I0 \
+    "del(.details, .isDefault, .secondFactors, .multiFactors, .idps) | .allowRegister = ${signup_want}")"
+  log "setting sign-up to $([[ "$signup_want" == true ]] && echo on || echo off)"
+  resp="$(zitadel_call PUT /admin/v1/policies/login "$body")" \
+    || die "failed to update the instance login policy: ${resp:-no response}"
+  after="$(signup_read_policy)"
+  # Same policy with allowRegister and the change metadata left out must be
+  # identical, or the PUT changed something we did not mean to.
+  strip='del(.details, .allowRegister) | sort_keys(..)'
+  if [[ "$(printf '%s' "$before" | yq -p json -o json -I0 "$strip")" \
+        != "$(printf '%s' "$after" | yq -p json -o json -I0 "$strip")" ]]; then
+    die "the login policy changed in more than allowRegister — check it in the Console now. before: ${before}  after: ${after}"
+  fi
+  [[ "$(printf '%s' "$after" | yq -p json '.allowRegister == true')" == "$signup_want" ]] \
+    || die "the PUT succeeded but allowRegister did not change — check it in the Console"
+  signup_print_status "$after"
   exit 0
 fi
 

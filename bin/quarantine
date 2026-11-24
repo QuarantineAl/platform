@@ -1157,6 +1157,29 @@ cmd_user() {
 }
 
 # ---------------------------------------------------------------------------
+# signup — self sign-up (the Register button on the login page). One switch
+# for the whole Zitadel instance. See docs/site/guides/users/self-sign-up.md.
+# ---------------------------------------------------------------------------
+cmd_signup() {
+  load_config
+  local subcmd="${1:-}"
+  [[ $# -gt 0 ]] && shift
+  [[ $# -eq 0 ]] || die "usage: quarantine signup status|on|off"
+  case "$subcmd" in
+    status) _zitadel signup-status ;;
+    on)
+      # On prod this lets anyone on the internet make an account.
+      if [[ "$QUARANTINE_ENV" == "prod" ]]; then
+        warn "this lets anyone on the internet create an account on prod (it opens Wishora only; other apps still need a role)"
+        confirm_typed "Type the environment name to turn sign-up on" "$QUARANTINE_ENV" || die "confirmation failed — aborted"
+      fi
+      _zitadel signup-set on ;;
+    off) _zitadel signup-set off ;;
+    *) usage >&2; die "unknown 'signup' subcommand: ${subcmd}" ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
 # machine — service-account (non-human) identities, e.g. an n8n workflow
 # calling Lazzaretto's headless API with no person behind it. See
 # provisioners/zitadel.sh's own header for why this is a machine user, not a
@@ -1496,6 +1519,10 @@ Commands:
   staff remove <email>
   staff list [--json]
 
+  signup status           Is self sign-up (the Register button) on?
+  signup on|off           Turn it on or off for the whole Zitadel instance.
+                          'on' asks for confirmation on prod.
+
   machine onboard <username> --grant <app> <role> [--display-name D]
                           Create a Zitadel machine (service-account) user
                           and grant it a project role, in one call. For an
@@ -1570,6 +1597,7 @@ main() {
     machine) cmd_machine "$@" ;;
     tenant) cmd_tenant "$@" ;;
     staff) cmd_staff "$@" ;;
+    signup) cmd_signup "$@" ;;
     status) cmd_status "$@" ;;
     version) cmd_version "$@" ;;
     upgrade) cmd_upgrade "$@" ;;

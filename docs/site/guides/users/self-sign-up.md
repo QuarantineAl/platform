@@ -51,7 +51,34 @@ Zitadel has no SMTP provider on dev or prod. For self sign-up that means:
 
 ## Check whether sign-up is on
 
-On the VM, in a throwaway shell with the `z` helper from
+On the VM:
+
+```bash
+quarantine signup status
+```
+
+It prints `sign-up: on` or `sign-up: off`, and whether the `quarantine`
+organisation uses the instance default (it should say `yes`). See
+[quarantine signup](/platform/cli/signup/).
+
+## Turn sign-up on or off
+
+Changing it is the owner's call, and on prod it opens the door to anyone on
+the internet.
+
+```bash
+quarantine signup on     # on prod, asks you to type "prod" first
+quarantine signup off
+```
+
+The command changes only `allowRegister`, then re-reads the policy and
+stops with an error if anything else changed. It takes effect at once; the
+login page shows or hides Register on the next load.
+
+### By hand
+
+If you can't use the CLI, this is what it does. In a throwaway shell on the
+VM, with the `z` helper from
 [Verify a user's email](/platform/guides/users/verify-email/) (steps 1–2):
 
 ```bash
@@ -59,13 +86,9 @@ z GET /admin/v1/policies/login | yq -p json '.policy.allowRegister'     # instan
 z GET /management/v1/policies/login | yq -p json '.policy.isDefault'    # true: the org uses it
 ```
 
-`true` means on. `null` or `false` means off.
-
-## Turn sign-up on or off
-
-Changing it is the owner's call, and on prod it opens the door to anyone on
-the internet. The PUT replaces the whole policy, so send back everything
-you read with only `allowRegister` changed, then compare:
+`true` means on. `null` or `false` means off. The PUT replaces the whole
+policy, so send back everything you read with only `allowRegister` changed,
+then compare:
 
 ```bash
 before="$(z GET /admin/v1/policies/login | yq -p json -o json '.policy')"
@@ -77,8 +100,4 @@ diff <(printf '%s' "$before" | yq -p json -o json 'del(.details)') \
      <(printf '%s' "$after"  | yq -p json -o json 'del(.details)')
 ```
 
-The diff must show only `allowRegister`. Use `= false` to turn it off. It
-takes effect at once; the login page shows or hides Register on the next
-load.
-
-There is no `quarantine` command for this yet.
+The diff must show only `allowRegister`. Use `= false` to turn it off.
