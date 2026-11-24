@@ -9,8 +9,8 @@ sidebar:
 
 - `add` / `remove` edit this environment's `manifest.yaml` (desired state).
 - `add-redirect`, `remove-redirect`, `list-redirects`, `add-role`,
-  `list-roles` act on the app's Zitadel application and on the shared
-  `quarantine-apps` project. These only accept apps whose catalog entry has
+  `list-roles` act on the app's Zitadel application and the app's own
+  Zitadel project (Lazzaretto's is `quarantine-apps`). These only accept apps whose catalog entry has
   `needs_oidc: true`.
 
 Run on the VM. Every command acts on the VM's own environment.
@@ -169,10 +169,10 @@ quarantine app list-redirects delivery-note-ai --json
 quarantine app add-role <name> <role> [--display-name D] [--group G]
 ```
 
-Creates a role on the shared `quarantine-apps` project. `<name>` must be a
-`needs_oidc` catalog app, but it only selects the project and validates the
-name: **roles are shared by every app in the project**, which is why keys are
-prefixed by convention (`lazzaretto-admin`, `kujtime:admin`). Role keys may
+Creates a role on the app's own Zitadel project. Prefer adding it to the
+app's `zitadel_roles` in catalog.yaml, which `quarantine start` creates. Keys
+keep the app prefix (`lazzaretto-admin`, `kujtime:admin`) because apps match
+on the key. Role keys may
 contain letters, digits, `.`, `_`, `:` and `-`. The display name defaults to
 the key.
 
@@ -192,8 +192,7 @@ If it exists: `role 'lazzaretto-admin' already exists on project 'quarantine-app
 quarantine app list-roles <name> [--json]
 ```
 
-Read-only. Lists every role on the shared project (the same list whatever
-`<name>` you pass).
+Read-only. Lists every role on the app's project.
 
 ```text title="Output on dev, 2026-10-23"
 [quarantine] using existing Zitadel project 'quarantine-apps' (<project-id>)

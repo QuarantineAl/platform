@@ -45,7 +45,10 @@ services:
     environment:
       DATABASE_URL: postgres://kujtime:${DATABASE_PASSWORD_KUJTIME}@postgres:5432/kujtime
       ZITADEL_ISSUER_URL: https://auth.${DOMAIN}
-      ZITADEL_PROJECT_ID: ${ZITADEL_PROJECT_ID}
+      # Kujtime's own Zitadel project (roles are read from its project-scoped
+      # claim). Falls back to the old shared project until the first
+      # `quarantine start` that moves Kujtime has run.
+      ZITADEL_PROJECT_ID: ${ZITADEL_PROJECT_ID_KUJTIME:-${ZITADEL_PROJECT_ID}}
       OIDC_CLIENT_ID_KUJTIME: ${OIDC_CLIENT_ID_KUJTIME}
       OIDC_CLIENT_SECRET_KUJTIME: ${OIDC_CLIENT_SECRET_KUJTIME}
       KUJTIME_SESSION_SECRET: ${KUJTIME_SESSION_SECRET}

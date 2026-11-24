@@ -1,22 +1,23 @@
 #!/usr/bin/env bash
-# provisioners/staff.sh — the environment's staff allowlist.
+# provisioners/staff.sh — who may open the shared Lazzaretto instance.
 #
 # Run it through `quarantine staff ...` (bin/quarantine), which decrypts the
 # secrets and resolves DOMAIN first, like `quarantine tenant ...`.
 #
 # WHY THIS EXISTS
-#   Zitadel's login page lets anyone register (Wishora needs public sign-up),
-#   and every app shares one Zitadel organization and project. So "signed in"
-#   only means "has an account", not "works here". Every internal app behind
-#   oauth2-proxy (shared Lazzaretto, n8n, docs, bem, delivery-note-ai,
-#   uptime-kuma) admits only the emails in this one file.
+#   Every other app is gated by Zitadel itself: its project requires a role
+#   to log in. Lazzaretto can't be: the shared instance, its PR sandboxes and
+#   every tenant share one Zitadel application, and tenant members hold
+#   Lazzaretto roles. So the shared instance (and its PR sandboxes) admits
+#   only the emails in this file, the same way each tenant admits only its
+#   own members.
 #
 # THE FILE
 #   ${QUARANTINE_STAFF_FILE} (default /opt/quarantine/staff/authenticated-emails.txt),
 #   one email per line. It lives outside the repo for the same reason tenant
-#   allowlists do: it lists real people's addresses. Each oauth2-proxy watches
-#   it, so add/remove take effect without a restart. A missing file fails
-#   closed: the containers can't start. `quarantine start` creates an empty one.
+#   allowlists do: it lists real people's addresses. oauth2-proxy watches it,
+#   so add/remove take effect without a restart. A missing file fails
+#   closed: the container can't start. `quarantine start` creates an empty one.
 #
 #   The writes copy lazzaretto-tenant.sh's write_members(): rewrite in place
 #   (Docker binds the inode, a rename would go unseen) and keep it 0644
@@ -91,7 +92,7 @@ case "$VERB" in
   ensure)
     if [[ ! -f "$STAFF_FILE" ]]; then
       ensure_file
-      warn "created an EMPTY staff allowlist at ${STAFF_FILE}: nobody can open the internal apps until you run 'quarantine staff add <email>'"
+      warn "created an EMPTY staff allowlist at ${STAFF_FILE}: nobody can open the shared Lazzaretto until you run 'quarantine staff add <email>'"
     else
       ensure_file
     fi
@@ -127,7 +128,7 @@ case "$VERB" in
       exit 0
     fi
     write_staff "${kept[@]}"
-    log "removed '${email}' from the staff list — the internal apps refuse them from their next request"
+    log "removed '${email}' from the staff list — the shared Lazzaretto refuses them from their next request"
     ;;
 
   list)

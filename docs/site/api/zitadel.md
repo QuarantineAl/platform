@@ -199,7 +199,8 @@ z POST /zitadel.project.v2.ProjectService/ListProjects '{}'
 ]}
 ```
 
-`quarantine-apps` has no `projectRoleCheck` or `hasProjectCheck`.
+(Output from before each app got its own project. Since then every app
+project except Wishora's has `authorizationRequired: true`.)
 `projectRoleAssertion` was `true` on dev and absent (false) on prod.
 
 ```bash title="Roles (same as quarantine app list-roles)"

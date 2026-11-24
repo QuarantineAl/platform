@@ -27,9 +27,11 @@ callback.
 ```
 
 On the next `quarantine start` with `myapp` in the manifest,
-`provisioners/zitadel.sh` creates an OIDC application named `myapp` in the
-`quarantine-apps` project (code flow, refresh tokens, web app,
-`client_secret_basic`, `idTokenUserinfoAssertion: true`), stores the client id
+`provisioners/zitadel.sh` creates a Zitadel project `myapp` (role required to
+log in), the roles listed in the catalog's `zitadel_roles` (use `myapp:access`
+and `myapp:admin`), and an OIDC application `myapp` in it (code flow, refresh
+tokens, web app, `client_secret_basic`, `idTokenUserinfoAssertion` and
+`idTokenRoleAssertion` on), stores the client id
 and secret in `secrets.sops.yaml`, and exports `OIDC_CLIENT_ID_MYAPP` and
 `OIDC_CLIENT_SECRET_MYAPP` into the environment's `.env`. List only the
 persistent host's callback; tenants and PR sandboxes add their own at runtime
@@ -54,7 +56,7 @@ Key settings:
 | Setting | Value | Why |
 |---|---|---|
 | `OAUTH2_PROXY_OIDC_ISSUER_URL` | `https://auth.${DOMAIN}` | Per-environment issuer |
-| `OAUTH2_PROXY_EMAIL_DOMAINS` + `OAUTH2_PROXY_AUTHENTICATED_EMAILS_FILE` | `""` + `/etc/oauth2-proxy/authenticated-emails.txt`, with the `*staff-allowlist` volume | Only people on the staff list ([`quarantine staff`](/platform/cli/staff/)). Never `"*"`: anyone can register on Zitadel's login page |
+| `OAUTH2_PROXY_EMAIL_DOMAINS` | `"*"` | Safe only because Zitadel's project role check already refused anyone without a role in this app |
 | `OAUTH2_PROXY_UPSTREAMS` | `static://202` | Traefik does the proxying; oauth2-proxy only answers `/oauth2/auth` |
 | `OAUTH2_PROXY_REDIRECT_URL` | `https://<sub>.${DOMAIN}/oauth2/callback` | Must match the catalog |
 | `OAUTH2_PROXY_COOKIE_DOMAINS`, `OAUTH2_PROXY_WHITELIST_DOMAINS` | `.${DOMAIN}` | Only for multi-host apps, so the cookie and the `rd` return URL work on the API host too |
@@ -119,7 +121,9 @@ curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' https://myapp.dev.quara
 
 ## Who can sign in
 
-The `quarantine-apps` project has no project-level role or grant check, so any
-user of that environment's Zitadel can complete the OIDC flow for any app.
-Restrict access in oauth2-proxy (allowlist) or in the app (roles). See
+Only people with a role in the app's project. Anyone can register on
+Zitadel's login page, so keep the default role check unless the app is meant
+to be public (then set `zitadel_role_check: false` and decide access in the
+app, like Wishora). Grant access with
+`quarantine user grant <email> myapp myapp:access`. See
 [Add a user](/platform/guides/users/add-a-user/).

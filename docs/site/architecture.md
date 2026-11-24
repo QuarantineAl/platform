@@ -105,9 +105,10 @@ What decides whether an authenticated person gets in:
 
 | Setting on the oauth2-proxy instance | Effect |
 |---|---|
-| `OAUTH2_PROXY_EMAIL_DOMAINS: ""` + the staff allowlist | Only people on the environment's staff list are admitted. Used by every internal app: the shared Lazzaretto instance and its PR sandboxes, n8n, docs, bem, delivery-note-ai and uptime-kuma. Managed with [`quarantine staff`](/platform/cli/staff/). |
-| `OAUTH2_PROXY_EMAIL_DOMAINS: ""` + a tenant allowlist | Only the tenant's members are admitted. Used by per-tenant Lazzaretto instances; managed with [`quarantine tenant`](/platform/cli/tenant/). |
-| `OAUTH2_PROXY_EMAIL_DOMAINS: "*"` | Any signed-in user. **Used by no instance**: Zitadel's login page lets anyone register, so `"*"` would open the app to strangers. |
+| Zitadel project role check | Zitadel refuses the login unless the person holds a role in the app's project. The real gate for every app except Wishora. Grant with [`quarantine user grant`](/platform/cli/user/). |
+| `OAUTH2_PROXY_EMAIL_DOMAINS: "*"` | Anyone Zitadel let through. Used by n8n, docs, bem, delivery-note-ai and uptime-kuma, which rely on the role check above. |
+| `OAUTH2_PROXY_EMAIL_DOMAINS: ""` + the staff allowlist | Only people on the staff list. Used by the shared Lazzaretto instance and its PR sandboxes, because tenant members also hold Lazzaretto roles. Managed with [`quarantine staff`](/platform/cli/staff/). |
+| `OAUTH2_PROXY_EMAIL_DOMAINS: ""` + a tenant allowlist | Only the tenant's members. Used by per-tenant Lazzaretto instances; managed with [`quarantine tenant`](/platform/cli/tenant/). |
 | `email_verified` claim | oauth2-proxy rejects an ID token whose email is not verified, unless `--insecure-oidc-allow-unverified-email` is set. No instance here sets it. See [Verify a user's email](/platform/guides/users/verify-email/). |
 
 Lazzaretto's instance also sets `OAUTH2_PROXY_SET_AUTHORIZATION_HEADER`, so the
@@ -130,14 +131,17 @@ One Zitadel instance per environment, served at `https://auth.<domain>`:
 - `zitadel-api` (the API and OIDC endpoints) and `zitadel-login` (the Login V2
   UI under `/ui/v2/login`), both v4.16.1.
 - One organisation, `quarantine`.
-- One project, **`quarantine-apps`**, holding one OIDC application per catalog
-  app with `needs_oidc: true`. Roles are defined once on this project and
-  shared by every app in it, which is why role keys are app-prefixed
-  (`lazzaretto-admin`, `kujtime:admin`).
-- The project has **no** `projectRoleCheck` or `hasProjectCheck` (checked on
-  both environments on 2026-10-23), so Zitadel itself lets any user of the
-  organisation sign in to any app. Access control happens in oauth2-proxy and
-  in the apps.
+- **One project per app** with `needs_oidc: true`, holding that app's OIDC
+  application and its roles (catalog.yaml `zitadel_project`, default the app's
+  name). Lazzaretto keeps the original project, `quarantine-apps`, which its
+  tenants and PR sandboxes share. Role keys stay app-prefixed
+  (`lazzaretto-admin`, `kujtime:admin`) because apps match on the key.
+- Every project has **"role required to log in"** on (`authorizationRequired`,
+  the Console's "Check authorization on authentication"), except Wishora's
+  (catalog `zitadel_role_check: false`). Anyone can register on the login
+  page, so this is what stops a new account reaching an app: Zitadel refuses
+  the login unless the person holds one of that app's roles. `quarantine
+  start` sets it back if someone changes it in the Console.
 - Two machine users created at bootstrap: `quarantine-provisioner` (its PAT is
   what the CLI uses; it holds `IAM_OWNER` and `ORG_OWNER`) and `login-client`
   (used by the Login V2 UI).

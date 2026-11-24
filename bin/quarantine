@@ -441,7 +441,7 @@ cmd_start() {
 
   generate_env_file "$repo_root" "$env" "$plaintext" "$manifest"
 
-  # Every internal oauth2-proxy binds the staff allowlist; make sure it exists
+  # The shared Lazzaretto's oauth2-proxy binds the staff allowlist; make sure it exists
   # (empty = nobody gets in) before anything below starts one.
   "${repo_root}/provisioners/staff.sh" ensure "$repo_root" "$env" "$plaintext"
 
@@ -611,7 +611,7 @@ generate_env_file() {
   # this isn't in REQUIRED_SECRET_KEYS.
   github_runner_pat="$(secrets_get "$plaintext" '.core.github_runner.pat')"
 
-  # The shared `quarantine-apps` Zitadel project's id. Not a secret -- it
+  # The `quarantine-apps` Zitadel project's id (Lazzaretto's project). Not a secret -- it
   # rides in every client-credentials token's `aud` claim -- but this is the
   # per-environment value store the .env writer already reads, and the id is
   # environment-specific (each environment has its own Zitadel). Legitimately
@@ -678,6 +678,9 @@ generate_env_file() {
     oidc_var="$(printf '%s' "$oidc_app" | tr '[:lower:]-' '[:upper:]_')"
     printf 'OIDC_CLIENT_ID_%s=%s\n' "$oidc_var" "$oidc_id" >> "$tmp"
     printf 'OIDC_CLIENT_SECRET_%s=%s\n' "$oidc_var" "$oidc_secret" >> "$tmp"
+    # The app's own Zitadel project (provisioners/zitadel.sh persists it), for
+    # apps that read roles from the project-scoped claim (Kujtime).
+    printf 'ZITADEL_PROJECT_ID_%s=%s\n' "$oidc_var" "$(secrets_get "$plaintext" ".apps[\"${oidc_app}\"].zitadel_project_id")" >> "$tmp"
   done <<< "$oidc_apps"
 
   # S3 bucket and key for every needs_bucket app, same idea as the OIDC
@@ -1311,7 +1314,7 @@ cmd_tenant() {
 }
 
 # ---------------------------------------------------------------------------
-# staff — who may open the internal apps behind oauth2-proxy. See
+# staff — who may open the shared Lazzaretto instance. See
 # provisioners/staff.sh.
 # ---------------------------------------------------------------------------
 cmd_staff() {
@@ -1465,12 +1468,11 @@ Commands:
                           (e.g. when a PR sandbox closes).
   app list-redirects <name> [--json]
                           List every redirect URI registered on <name>'s
-                          shared Zitadel Application.
+                          Zitadel Application.
   app add-role <name> <role> [--display-name D] [--group G]
-                          Add a project role (e.g. lazzaretto-admin). Roles
-                          live on the shared project, not per Application.
+                          Add a role to <name>'s own Zitadel project.
   app list-roles <name> [--json]
-                          List the shared project's roles.
+                          List <name>'s project roles.
 
   user add <email> [--given-name G] [--family-name F] [--invite] [--password-stdin]
                           Create a Zitadel human user. Idempotent by email.
@@ -1485,13 +1487,12 @@ Commands:
   user revoke <email> <app> <role>
                           Grant/revoke a project role for one person.
 
-  An identity alone grants no access to anything: the internal apps also
-  need the staff list ('quarantine staff'), and a Lazzaretto tenant needs
-  membership of that tenant ('quarantine tenant').
+  An identity alone opens only Wishora: every other app's Zitadel project
+  requires a role ('user grant <email> <app> <app>:access'). The shared
+  Lazzaretto also needs the staff list, and a tenant its own membership.
 
-  staff add <email>       Let this person into the internal apps (shared
-                          Lazzaretto, n8n, docs, bem, delivery-note-ai,
-                          uptime-kuma). No restart needed.
+  staff add <email>       Let this person into the shared Lazzaretto
+                          instance and its PR sandboxes. No restart needed.
   staff remove <email>
   staff list [--json]
 

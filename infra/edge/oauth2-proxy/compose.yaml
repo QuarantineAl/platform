@@ -81,27 +81,18 @@
 # PIN CHECKPOINT: quay.io/oauth2-proxy/oauth2-proxy:v7.15.3 (verified
 # 2026-07-26). Confirm before Phase 2.
 #
-# WHO GETS IN: the staff allowlist. Anyone can register on Zitadel's login
-# page (Wishora needs public sign-up), and every app shares one organization
-# and project, so "signed in" proves nothing about working here. Every block
-# below therefore sets EMAIL_DOMAINS to "" and admits only the emails in the
-# staff allowlist (`quarantine staff add <email>`, provisioners/staff.sh). A
-# per-tenant Lazzaretto swaps in its own tenant allowlist instead.
+# WHO GETS IN: Zitadel decides. Every app has its own Zitadel project with
+# "role required to log in" on (catalog.yaml: zitadel_project,
+# zitadel_role_check; provisioners/zitadel.sh keeps it on), so someone who
+# merely registered on the login page is refused by Zitadel before
+# oauth2-proxy ever sees them. That is why the single-app blocks below can
+# use EMAIL_DOMAINS "*". Grant access with
+# `quarantine user grant <email> <app> <app>:access`.
 #
-# The two settings work as a pair. EMAIL_DOMAINS "*" makes oauth2-proxy
-# ignore the allowlist with no error (see the Lazzaretto block's comment),
-# so never set "*" on an internal app.
-#
-# The file is bound from the host. If it is missing, the container cannot
-# start: fail closed. `quarantine start` creates it (empty) when missing.
-# The fallback path must match QUARANTINE_STAFF_FILE in lib/common.sh; it is
-# there so a host whose .env predates STAFF_ALLOWLIST_FILE still binds the
-# right file.
-x-staff-allowlist: &staff-allowlist
-  type: bind
-  source: ${STAFF_ALLOWLIST_FILE:-/opt/quarantine/staff/authenticated-emails.txt}
-  target: /etc/oauth2-proxy/authenticated-emails.txt
-  read_only: true
+# Lazzaretto is the exception: the shared instance, its PR sandboxes and
+# every tenant share ONE Zitadel application, and tenant members hold
+# Lazzaretto roles, so Zitadel can't tell the instances apart. Each
+# Lazzaretto instance therefore also has an email allowlist (see its block).
 
 services:
   oauth2-proxy-uptime-kuma:
@@ -115,9 +106,9 @@ services:
       OAUTH2_PROXY_CLIENT_ID: ${OIDC_CLIENT_ID_UPTIME_KUMA}
       OAUTH2_PROXY_CLIENT_SECRET: ${OIDC_CLIENT_SECRET_UPTIME_KUMA}
       OAUTH2_PROXY_COOKIE_SECRET: ${OAUTH2_PROXY_COOKIE_SECRET}
-      # Staff only: see "WHO GETS IN" at the top of this file.
-      OAUTH2_PROXY_EMAIL_DOMAINS: ""
-      OAUTH2_PROXY_AUTHENTICATED_EMAILS_FILE: /etc/oauth2-proxy/authenticated-emails.txt
+      # "*" is safe only because Zitadel already refused anyone without a
+      # role in this app's project: see "WHO GETS IN" at the top of this file.
+      OAUTH2_PROXY_EMAIL_DOMAINS: "*"
       OAUTH2_PROXY_REVERSE_PROXY: "true"
       OAUTH2_PROXY_HTTP_ADDRESS: 0.0.0.0:4180
       OAUTH2_PROXY_UPSTREAMS: static://202
@@ -136,8 +127,6 @@ services:
       OAUTH2_PROXY_SCOPE: "openid email profile"
     networks:
       - edge
-    volumes:
-      - *staff-allowlist
     # No healthcheck: the image is a static distroless binary with no
     # shell, curl, or wget to probe itself with (confirmed via `docker
     # run --entrypoint sh`, which fails outright). wait_healthy() accepts
@@ -272,9 +261,9 @@ services:
       # this file.
       #
       # Always "": every instance (the shared one, PR sandboxes and tenants)
-      # admits only the emails in its allowlist file below. It used to
-      # default to "*" for the shared instance and sandboxes, which let in
-      # anyone who registered on Zitadel's public sign-up page. An empty
+      # admits only the emails in its allowlist file below. Zitadel's role
+      # check can't do this job alone: tenant members hold Lazzaretto roles
+      # too, and would otherwise reach the shared instance. An empty
       # domain list is fine alongside an allowlist — oauth2-proxy only
       # rejects the config when email-domain, authenticated-emails-file AND
       # htpasswd-file are all absent (pkg/validation/options.go).
@@ -356,8 +345,11 @@ services:
       # Backs OAUTH2_PROXY_AUTHENTICATED_EMAILS_FILE above. A per-tenant
       # instance sets LAZZARETTO_ALLOWLIST_FILE to its own tenant allowlist;
       # the shared instance and every PR sandbox leave it unset and get the
-      # staff allowlist (same fallback as the x-staff-allowlist anchor at the
-      # top of this file).
+      # staff allowlist (`quarantine staff`). The fallback path must match
+      # QUARANTINE_STAFF_FILE in lib/common.sh, so a host whose .env predates
+      # STAFF_ALLOWLIST_FILE still binds the right file. If the file is
+      # missing the container can't start: fail closed. `quarantine start`
+      # creates it (empty) when missing.
       #
       # LONG SYNTAX, deliberately: short syntax ("${VAR:-...}:/etc/...:ro")
       # parses as one colon-delimited string and gives a far worse error
@@ -472,9 +464,9 @@ services:
       OAUTH2_PROXY_CLIENT_ID: ${OIDC_CLIENT_ID_N8N}
       OAUTH2_PROXY_CLIENT_SECRET: ${OIDC_CLIENT_SECRET_N8N}
       OAUTH2_PROXY_COOKIE_SECRET: ${OAUTH2_PROXY_COOKIE_SECRET}
-      # Staff only: see "WHO GETS IN" at the top of this file.
-      OAUTH2_PROXY_EMAIL_DOMAINS: ""
-      OAUTH2_PROXY_AUTHENTICATED_EMAILS_FILE: /etc/oauth2-proxy/authenticated-emails.txt
+      # "*" is safe only because Zitadel already refused anyone without a
+      # role in this app's project: see "WHO GETS IN" at the top of this file.
+      OAUTH2_PROXY_EMAIL_DOMAINS: "*"
       OAUTH2_PROXY_REVERSE_PROXY: "true"
       OAUTH2_PROXY_HTTP_ADDRESS: 0.0.0.0:4180
       OAUTH2_PROXY_UPSTREAMS: static://202
@@ -488,8 +480,6 @@ services:
       OAUTH2_PROXY_SCOPE: "openid email profile"
     networks:
       - edge
-    volumes:
-      - *staff-allowlist
     # No healthcheck — same reasoning as oauth2-proxy-uptime-kuma above
     # (static distroless binary, no shell/curl/wget to probe with).
     labels:
@@ -529,9 +519,9 @@ services:
       # Host-only cookie (no COOKIE_DOMAINS), but still a unique name so it can
       # never collide with Lazzaretto's parent-domain cookie in one header.
       OAUTH2_PROXY_COOKIE_NAME: _oauth2_proxy_delivery_note_ai
-      # Staff only: see "WHO GETS IN" at the top of this file.
-      OAUTH2_PROXY_EMAIL_DOMAINS: ""
-      OAUTH2_PROXY_AUTHENTICATED_EMAILS_FILE: /etc/oauth2-proxy/authenticated-emails.txt
+      # "*" is safe only because Zitadel already refused anyone without a
+      # role in this app's project: see "WHO GETS IN" at the top of this file.
+      OAUTH2_PROXY_EMAIL_DOMAINS: "*"
       OAUTH2_PROXY_REVERSE_PROXY: "true"
       OAUTH2_PROXY_HTTP_ADDRESS: 0.0.0.0:4180
       OAUTH2_PROXY_UPSTREAMS: static://202
@@ -543,8 +533,6 @@ services:
       OAUTH2_PROXY_SCOPE: "openid email profile"
     networks:
       - edge
-    volumes:
-      - *staff-allowlist
     # No healthcheck — same reasoning as oauth2-proxy-uptime-kuma above.
     labels:
       - traefik.enable=true
@@ -582,9 +570,9 @@ services:
       # Host-only cookie (no COOKIE_DOMAINS), but still a unique name so it can
       # never collide with Lazzaretto's parent-domain cookie in one header.
       OAUTH2_PROXY_COOKIE_NAME: _oauth2_proxy_bem
-      # Staff only: see "WHO GETS IN" at the top of this file.
-      OAUTH2_PROXY_EMAIL_DOMAINS: ""
-      OAUTH2_PROXY_AUTHENTICATED_EMAILS_FILE: /etc/oauth2-proxy/authenticated-emails.txt
+      # "*" is safe only because Zitadel already refused anyone without a
+      # role in this app's project: see "WHO GETS IN" at the top of this file.
+      OAUTH2_PROXY_EMAIL_DOMAINS: "*"
       OAUTH2_PROXY_REVERSE_PROXY: "true"
       OAUTH2_PROXY_HTTP_ADDRESS: 0.0.0.0:4180
       OAUTH2_PROXY_UPSTREAMS: static://202
@@ -596,8 +584,6 @@ services:
       OAUTH2_PROXY_SCOPE: "openid email profile"
     networks:
       - edge
-    volumes:
-      - *staff-allowlist
     # No healthcheck — same reasoning as oauth2-proxy-uptime-kuma above.
     labels:
       - traefik.enable=true
@@ -632,9 +618,9 @@ services:
       # Host-only cookie (no COOKIE_DOMAINS), but still a unique name so it can
       # never collide with Lazzaretto's parent-domain cookie in one header.
       OAUTH2_PROXY_COOKIE_NAME: _oauth2_proxy_docs
-      # Staff only: see "WHO GETS IN" at the top of this file.
-      OAUTH2_PROXY_EMAIL_DOMAINS: ""
-      OAUTH2_PROXY_AUTHENTICATED_EMAILS_FILE: /etc/oauth2-proxy/authenticated-emails.txt
+      # "*" is safe only because Zitadel already refused anyone without a
+      # role in this app's project: see "WHO GETS IN" at the top of this file.
+      OAUTH2_PROXY_EMAIL_DOMAINS: "*"
       OAUTH2_PROXY_REVERSE_PROXY: "true"
       OAUTH2_PROXY_HTTP_ADDRESS: 0.0.0.0:4180
       OAUTH2_PROXY_UPSTREAMS: static://202
@@ -646,8 +632,6 @@ services:
       OAUTH2_PROXY_SCOPE: "openid email profile"
     networks:
       - edge
-    volumes:
-      - *staff-allowlist
     # No healthcheck — same reasoning as oauth2-proxy-uptime-kuma above.
     labels:
       - traefik.enable=true

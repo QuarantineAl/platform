@@ -376,8 +376,26 @@ CURL_IMAGE="curlimages/curl:8.11.1"
 ZITADEL_API_CONTAINER="quarantine-zitadel-api"
 ZITADEL_LOGIN_CONTAINER="quarantine-zitadel-login"
 ZITADEL_NETWORK="edge"
-PROJECT_NAME="quarantine-apps"
 CATALOG_FILE="${repo_root}/catalog.yaml"
+
+# ONE ZITADEL PROJECT PER APP. Zitadel can only limit who logs in per
+# project ("authorizationRequired": no role in the project, no login through
+# any of its applications), so each app gets its own project, named by
+# catalog.yaml's `zitadel_project` (default: the app's own name). Lazzaretto
+# keeps the original shared project, quarantine-apps, because its tenants,
+# PR sandboxes, token audience and machine-user grants are all tied to it.
+# `zitadel_role_check: false` turns the check off (Wishora: anyone who signs
+# up may use it). Apps created before this live in quarantine-apps; the
+# ensure mode moves them (see "move out of the legacy project" below).
+LEGACY_PROJECT_NAME="quarantine-apps"
+PROJECT_NAME=""
+ROLE_CHECK="true"
+if [[ -n "$name" ]]; then
+  PROJECT_NAME="$(yq eval ".apps[] | select(.name == \"${name}\") | .zitadel_project // .name" "$CATALOG_FILE")"
+  # `== false | not`, not `// true`: yq's // treats an explicit false as
+  # missing and would hand back true.
+  ROLE_CHECK="$(yq eval ".apps[] | select(.name == \"${name}\") | (.zitadel_role_check == false) | not" "$CATALOG_FILE")"
+fi
 
 : "${DOMAIN:?DOMAIN must be set (inherited from load_config in bin/quarantine)}"
 
@@ -471,15 +489,16 @@ org_id="$(printf '%s' "$whoami_response" | yq -p json '.user.details.resourceOwn
 project_id=""
 ensure_project_id() {
   [[ -n "$project_id" ]] && return 0
-  local list_proj_body list_proj_response create_proj_body create_proj_response role_assertion
+  [[ -n "$PROJECT_NAME" ]] || die "'${name}' is not in catalog.yaml, so it has no Zitadel project"
+  local list_proj_body list_proj_response create_proj_body create_proj_response role_assertion role_check
   list_proj_body="$(printf '{"filters":[{"projectNameFilter":{"projectName":"%s"}},{"organizationIdFilter":{"organizationId":"%s"}}]}' "$PROJECT_NAME" "$org_id")"
   list_proj_response="$(zitadel_call POST /zitadel.project.v2.ProjectService/ListProjects "$list_proj_body")" \
     || die "failed to list Zitadel projects"
   project_id="$(printf '%s' "$list_proj_response" | yq -p json '.projects[0].projectId')"
 
   if [[ -z "$project_id" || "$project_id" == "null" ]]; then
-    log "creating Zitadel project '${PROJECT_NAME}'"
-    create_proj_body="$(printf '{"organizationId":"%s","name":"%s","projectRoleAssertion":true}' "$org_id" "$PROJECT_NAME")"
+    log "creating Zitadel project '${PROJECT_NAME}' (role required to log in: ${ROLE_CHECK})"
+    create_proj_body="$(printf '{"organizationId":"%s","name":"%s","projectRoleAssertion":true,"authorizationRequired":%s}' "$org_id" "$PROJECT_NAME" "$ROLE_CHECK")"
     create_proj_response="$(zitadel_call POST /zitadel.project.v2.ProjectService/CreateProject "$create_proj_body")" \
       || die "failed to create Zitadel project '${PROJECT_NAME}'"
     project_id="$(printf '%s' "$create_proj_response" | yq -p json '.projectId')"
@@ -497,6 +516,17 @@ ensure_project_id() {
         fi
         ;;
     esac
+    # Only `ensure` (every `quarantine start`) sets the login check, so a
+    # project switched by hand in the Console is put back on the next start.
+    if [[ "$MODE" == "ensure" ]]; then
+      role_check="$(printf '%s' "$list_proj_response" | yq -p json '.projects[0].authorizationRequired // false')"
+      if [[ "$role_check" != "$ROLE_CHECK" ]]; then
+        log "setting 'role required to log in' to ${ROLE_CHECK} on '${PROJECT_NAME}' (${project_id})"
+        zitadel_call POST /zitadel.project.v2.ProjectService/UpdateProject \
+          "$(printf '{"projectId":"%s","authorizationRequired":%s}' "$project_id" "$ROLE_CHECK")" >/dev/null \
+          || die "failed to set authorizationRequired on Zitadel project '${PROJECT_NAME}'"
+      fi
+    fi
   fi
 }
 
@@ -546,7 +576,7 @@ zitadel_call_private() {
 }
 
 # find_application_id <name> — the Application id for one catalog app within
-# the shared project, or empty. Never creates.
+# its own project, or empty. Never creates.
 find_application_id() {
   local app="$1" body response
   body="$(printf '{"filters":[{"projectIdFilter":{"projectId":"%s"}},{"nameFilter":{"name":"%s"}}]}' "$project_id" "$app")"
@@ -780,7 +810,7 @@ if [[ "$MODE" == "app-list-roles" ]]; then
         \"projectId\": \"${project_id}\",
         \"roles\": [(.result // [])[] | {\"key\": .key, \"displayName\": (.displayName // \"\"), \"group\": (.group // \"\")}]}"
   else
-    log "roles on project '${PROJECT_NAME}' (${project_id}), shared by every app in it:"
+    log "roles on project '${PROJECT_NAME}' (${project_id}):"
     printf '%s' "$roles_response" | yq -p json '(.result // [])[].key'
   fi
   exit 0
@@ -1239,14 +1269,71 @@ fi
 # remove-redirect existed.
 # =============================================================================
 
-# --- if already provisioned, we're done -------------------------------------
+# --- roles from catalog.yaml (zitadel_roles) ---------------------------------
+# Create the missing ones; never delete (a removed role would silently drop
+# it from every grant).
+roles_response="$(zitadel_call POST "/management/v1/projects/${project_id}/roles/_search" '{"query":{"limit":1000}}')" \
+  || die "failed to list roles on project '${PROJECT_NAME}'"
+while IFS= read -r want_role; do
+  [[ -z "$want_role" ]] && continue
+  [[ "$want_role" =~ ^[A-Za-z0-9._:-]+$ ]] || die "invalid role '${want_role}' in catalog.yaml for '${name}'"
+  if ! printf '%s' "$roles_response" | yq -p json '(.result // [])[].key' | grep -qxF "$want_role"; then
+    zitadel_call POST "/management/v1/projects/${project_id}/roles" \
+      "$(printf '{"roleKey":"%s","displayName":"%s"}' "$want_role" "$want_role")" >/dev/null \
+      || die "failed to add role '${want_role}' to project '${PROJECT_NAME}'"
+    log "added role '${want_role}' to project '${PROJECT_NAME}'"
+  fi
+done < <(yq eval ".apps[] | select(.name == \"${name}\") | .zitadel_roles[]?" "$CATALOG_FILE")
+
+# --- the project id, for apps that read roles from a project-scoped claim ----
+# (Kujtime: urn:zitadel:iam:org:project:<id>:roles.) Written only when it
+# changes, because every write re-encrypts secrets.sops.yaml and leaves the
+# checkout dirty.
+project_id_key=".apps[\"${name}\"].zitadel_project_id"
+if [[ "$(secrets_get "$plaintext_file" "$project_id_key")" != "$project_id" ]]; then
+  secrets_set "$repo_root" "$env" "$project_id_key" "$project_id"
+fi
+
+# --- if already provisioned in its own project, we're done -------------------
 client_id_key=".apps[\"${name}\"].oidc_client_id"
 client_secret_key=".apps[\"${name}\"].oidc_client_secret"
 client_id="$(secrets_get "$plaintext_file" "$client_id_key")"
 
+# --- move out of the legacy project -------------------------------------------
+# Zitadel can't move an Application between projects. An app still living in
+# quarantine-apps gets a NEW Application in its own project (new client id
+# and secret, persisted below and picked up by the .env that `quarantine
+# start` regenerates right after this), carrying over every redirect URI the
+# old one had (Kujtime city callbacks, PR preview callbacks), and the old
+# Application is deleted. Everyone signed in to that app logs in again.
+legacy_app_id="" legacy_project_id="" additional_origins_json="[]"
+declare -a legacy_redirects=() legacy_logout_redirects=()
+
 if [[ -n "$client_id" && "$client_id" != CHANGEME* ]]; then
-  log "Zitadel OIDC application for '${name}' already provisioned (client_id persisted) — skipping"
-  exit 0
+  if [[ -n "$(find_application_id "$name")" ]]; then
+    log "Zitadel OIDC application for '${name}' already provisioned in project '${PROJECT_NAME}' — skipping"
+    exit 0
+  fi
+  if [[ "$PROJECT_NAME" != "$LEGACY_PROJECT_NAME" ]]; then
+    legacy_project_id="$(zitadel_call POST /zitadel.project.v2.ProjectService/ListProjects \
+      "$(printf '{"filters":[{"projectNameFilter":{"projectName":"%s"}},{"organizationIdFilter":{"organizationId":"%s"}}]}' "$LEGACY_PROJECT_NAME" "$org_id")" \
+      | yq -p json '.projects[0].projectId // ""')" || die "failed to list Zitadel projects"
+  fi
+  if [[ -n "$legacy_project_id" ]]; then
+    legacy_response="$(zitadel_call POST /zitadel.application.v2.ApplicationService/ListApplications \
+      "$(printf '{"filters":[{"projectIdFilter":{"projectId":"%s"}},{"nameFilter":{"name":"%s"}}]}' "$legacy_project_id" "$name")")" \
+      || die "failed to list Zitadel applications in '${LEGACY_PROJECT_NAME}'"
+    legacy_app_id="$(printf '%s' "$legacy_response" | yq -p json '.applications[0].applicationId // ""')"
+  fi
+  [[ -n "$legacy_app_id" ]] \
+    || die "'${name}' has a persisted client_id but no Application in '${PROJECT_NAME}' or '${LEGACY_PROJECT_NAME}' — clear ${client_id_key} in secrets.sops.yaml to create a new one"
+  while IFS= read -r uri; do [[ -n "$uri" ]] && legacy_redirects+=("$uri"); done \
+    < <(printf '%s' "$legacy_response" | yq -p json '.applications[0].oidcConfiguration.redirectUris[]?')
+  while IFS= read -r uri; do [[ -n "$uri" ]] && legacy_logout_redirects+=("$uri"); done \
+    < <(printf '%s' "$legacy_response" | yq -p json '.applications[0].oidcConfiguration.postLogoutRedirectUris[]?')
+  # Kujtime's city origins live here, not in the redirect list.
+  additional_origins_json="$(printf '%s' "$legacy_response" | yq -p json -o json -I0 '.applications[0].oidcConfiguration.additionalOrigins // []')"
+  log "moving '${name}' from '${LEGACY_PROJECT_NAME}' to its own project '${PROJECT_NAME}' (new client id; ${#legacy_redirects[@]} redirect URI(s) carried over)"
 fi
 
 # --- redirect URIs, from catalog.yaml with ${DOMAIN} substituted ------------
@@ -1261,10 +1348,13 @@ while IFS= read -r uri; do
   redirect_uris+=("$resolved_uri")
   logout_redirect_uris+=("$(oauth2_callback_to_origin "$resolved_uri")")
 done < <(yq eval ".apps[] | select(.name == \"${name}\") | .oidc_redirect_uris[]" "$CATALOG_FILE")
+# "${arr[@]}" with no ":-" fallback: bash >= 4.4, an empty array expands to nothing.
+redirect_uris+=("${legacy_redirects[@]}")
+logout_redirect_uris+=("${legacy_logout_redirects[@]}")
 
 # Built via yq's own YAML->JSON conversion (correct JSON-escaping for free)
 # rather than hand-quoting each URI into a JSON array string.
-redirect_uris_json="$(printf -- '- %s\n' "${redirect_uris[@]}" | yq -o json -)"
+redirect_uris_json="$(printf -- '- %s\n' "${redirect_uris[@]}" | yq -o json - | yq -p json -o json 'unique' -)"
 # unique: catalog.yaml lists exactly one redirect URI per app today, so
 # there's nothing to actually dedupe yet — cheap insurance against a future
 # entry with multiple hosts whose callback URIs share a bare origin.
@@ -1337,7 +1427,9 @@ create_app_body="$(cat <<JSON
     "applicationType": "OIDC_APP_TYPE_WEB",
     "authMethodType": "OIDC_AUTH_METHOD_TYPE_BASIC",
     "version": "OIDC_VERSION_1_0",
-    "idTokenUserinfoAssertion": true
+    "idTokenUserinfoAssertion": true,
+    "idTokenRoleAssertion": true,
+    "additionalOrigins": ${additional_origins_json}
   }
 }
 JSON
@@ -1351,4 +1443,12 @@ new_client_secret="$(printf '%s' "$create_app_response" | yq -p json '.oidcConfi
 
 secrets_set "$repo_root" "$env" "$client_id_key" "$new_client_id"
 secrets_set "$repo_root" "$env" "$client_secret_key" "$new_client_secret"
-log "Zitadel OIDC application created for '${name}'"
+log "Zitadel OIDC application created for '${name}' in project '${PROJECT_NAME}'"
+
+if [[ -n "$legacy_app_id" ]]; then
+  zitadel_call POST /zitadel.application.v2.ApplicationService/DeleteApplication \
+    "$(printf '{"applicationId":"%s","projectId":"%s"}' "$legacy_app_id" "$legacy_project_id")" >/dev/null \
+    || die "created '${name}' in '${PROJECT_NAME}' but failed to delete the old Application ${legacy_app_id} in '${LEGACY_PROJECT_NAME}' — delete it in the Console"
+  log "deleted the old '${name}' Application from '${LEGACY_PROJECT_NAME}'"
+  warn "role grants for '${name}' made on '${LEGACY_PROJECT_NAME}' do not move: grant them again with 'quarantine user grant <email> ${name} <role>'"
+fi

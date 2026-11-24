@@ -7,9 +7,10 @@ sidebar:
 
 Apps that have their own admin features check a **Zitadel project role** in
 the user's token, for example Lazzaretto checks `lazzaretto-admin` and Kujtime
-checks `kujtime:admin`. Roles live on the single shared project
-`quarantine-apps`, so a role is visible to every app; keys are prefixed with
-the app name by convention.
+checks `kujtime:admin`. Each app has its own Zitadel project with its
+roles (Lazzaretto's is `quarantine-apps`); keys keep the app prefix. A role in
+an app's project is also what lets someone log in to that app at all: most
+apps have `<app>:access` for that and `<app>:admin` for admin features.
 
 Run on the VM of the environment where the user exists.
 

@@ -71,16 +71,19 @@ verify-email procedure).
 
 ## 3. What the user can now reach
 
-An account on its own opens none of the internal apps: anyone can register
-on Zitadel's login page, so an account proves nothing.
+An account on its own opens only Wishora: anyone can register on Zitadel's
+login page, so every other app's Zitadel project requires a role.
 
-- **Internal apps** (shared Lazzaretto and its PR sandboxes, n8n, docs, bem,
-  delivery-note-ai, uptime-kuma): add the email to the staff list,
-  `quarantine staff add <email>`. See [quarantine staff](/platform/cli/staff/).
-  n8n then asks for its own login too.
+- **An app** (kujtime, bem, docs, n8n, ...): grant its access role,
+  `quarantine user grant <email> <app> <app>:access` (or `<app>:admin`). See
+  [Grant a role](/platform/guides/users/grant-a-role/). n8n then asks for its
+  own login too.
+- **The shared Lazzaretto instance**: a Lazzaretto role
+  (`quarantine user grant <email> lazzaretto lazzaretto-admin`) and the staff
+  list, `quarantine staff add <email>`. See [quarantine staff](/platform/cli/staff/).
 - **A Lazzaretto tenant** (`<tenant>-lazzaretto.quarantine.al`): add the email
   to the tenant's allowlist, `quarantine tenant member add <tenant> <email>`,
-  or give them their own tenant. See [quarantine tenant](/platform/cli/tenant/).
+  or give them their own tenant, plus a Lazzaretto role. See [quarantine tenant](/platform/cli/tenant/).
 - **Admin rights inside an app** (Lazzaretto admin, Kujtime admin): a project
   role. See [Grant a role](/platform/guides/users/grant-a-role/).
 - **Kujtime** signs people in itself; what a signed-in user can do there is
