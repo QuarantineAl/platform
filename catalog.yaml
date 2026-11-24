@@ -463,8 +463,8 @@ apps:
       The QuarantineAl knowledge base from QuarantineAl/docs: a static Astro
       Starlight site (nginx) assembled from every repository listed in that
       repo's sources.yaml. The whole host is behind oauth2-proxy-docs
-      (infra/edge/oauth2-proxy/compose.yaml) with EMAIL_DOMAINS "*": any
-      authenticated Zitadel user of the environment can read it, by design.
+      (infra/edge/oauth2-proxy/compose.yaml), which admits only the staff
+      list (`quarantine staff`), like every other internal app.
       No database, no volume, no secrets beyond the OIDC client. Built and
       deployed by the docs repo's own deploy.yml, every 30 minutes and on
       merge, redeploying only when a source commit changed.

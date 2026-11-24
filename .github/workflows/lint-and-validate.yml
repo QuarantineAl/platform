@@ -62,6 +62,7 @@ jobs:
             provisioners/garage.sh
             provisioners/zitadel.sh
             provisioners/lazzaretto-tenant.sh
+            provisioners/staff.sh
             scripts/new-app.sh
             lib/common.sh
           )

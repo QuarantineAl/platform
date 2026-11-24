@@ -23,10 +23,10 @@ lock or writes anything to the repository.
 | `user revoke <email> <app> <role>` | removes a project role |
 | `user remove <email>` | **deletes the user** |
 
-An identity alone gives access only to apps that admit any signed-in user.
-Lazzaretto tenants also need allowlist membership
-([`quarantine tenant`](/platform/cli/tenant/)), and in-app admin rights need a
-role grant. See [Add a user](/platform/guides/users/add-a-user/) for the whole
+An identity alone opens none of the internal apps: they also need the staff
+list ([`quarantine staff`](/platform/cli/staff/)). Lazzaretto tenants need
+membership of that tenant ([`quarantine tenant`](/platform/cli/tenant/)), and
+in-app admin rights need a role grant. See [Add a user](/platform/guides/users/add-a-user/) for the whole
 procedure.
 
 ## user add

@@ -71,18 +71,13 @@ verify-email procedure).
 
 ## 3. What the user can now reach
 
-An account on its own opens only apps that admit **any** signed-in user of that
-environment, that is, apps whose oauth2-proxy sets
-`OAUTH2_PROXY_EMAIL_DOMAINS: "*"` (checked in the running containers on
-2026-10-23):
+An account on its own opens none of the internal apps: anyone can register
+on Zitadel's login page, so an account proves nothing.
 
-| Environment | Open to any signed-in user |
-|---|---|
-| dev | `lazzaretto.dev.quarantine.al` (shared instance and PR sandboxes), `delivery-note-ai.dev.quarantine.al` |
-| prod | `lazzaretto.quarantine.al` (shared instance), `n8n.quarantine.al` (the editor, which then has n8n's own login) |
-
-Everything else needs more:
-
+- **Internal apps** (shared Lazzaretto and its PR sandboxes, n8n, docs, bem,
+  delivery-note-ai, uptime-kuma): add the email to the staff list,
+  `quarantine staff add <email>`. See [quarantine staff](/platform/cli/staff/).
+  n8n then asks for its own login too.
 - **A Lazzaretto tenant** (`<tenant>-lazzaretto.quarantine.al`): add the email
   to the tenant's allowlist, `quarantine tenant member add <tenant> <email>`,
   or give them their own tenant. See [quarantine tenant](/platform/cli/tenant/).

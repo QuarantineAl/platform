@@ -105,8 +105,9 @@ What decides whether an authenticated person gets in:
 
 | Setting on the oauth2-proxy instance | Effect |
 |---|---|
-| `OAUTH2_PROXY_EMAIL_DOMAINS: "*"` | Any Zitadel user of that environment is admitted. Used by delivery-note-ai, n8n, uptime-kuma and the shared Lazzaretto instance. |
-| `OAUTH2_PROXY_EMAIL_DOMAINS: ""` + an authenticated-emails file | Only listed emails are admitted. Used by per-tenant Lazzaretto instances; managed with [`quarantine tenant`](/platform/cli/tenant/). |
+| `OAUTH2_PROXY_EMAIL_DOMAINS: ""` + the staff allowlist | Only people on the environment's staff list are admitted. Used by every internal app: the shared Lazzaretto instance and its PR sandboxes, n8n, docs, bem, delivery-note-ai and uptime-kuma. Managed with [`quarantine staff`](/platform/cli/staff/). |
+| `OAUTH2_PROXY_EMAIL_DOMAINS: ""` + a tenant allowlist | Only the tenant's members are admitted. Used by per-tenant Lazzaretto instances; managed with [`quarantine tenant`](/platform/cli/tenant/). |
+| `OAUTH2_PROXY_EMAIL_DOMAINS: "*"` | Any signed-in user. **Used by no instance**: Zitadel's login page lets anyone register, so `"*"` would open the app to strangers. |
 | `email_verified` claim | oauth2-proxy rejects an ID token whose email is not verified, unless `--insecure-oidc-allow-unverified-email` is set. No instance here sets it. See [Verify a user's email](/platform/guides/users/verify-email/). |
 
 Lazzaretto's instance also sets `OAUTH2_PROXY_SET_AUTHORIZATION_HEADER`, so the

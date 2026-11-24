@@ -54,7 +54,7 @@ Key settings:
 | Setting | Value | Why |
 |---|---|---|
 | `OAUTH2_PROXY_OIDC_ISSUER_URL` | `https://auth.${DOMAIN}` | Per-environment issuer |
-| `OAUTH2_PROXY_EMAIL_DOMAINS` | `"*"` | Any signed-in user of the environment; use `""` plus `OAUTH2_PROXY_AUTHENTICATED_EMAILS_FILE` for an allowlist |
+| `OAUTH2_PROXY_EMAIL_DOMAINS` + `OAUTH2_PROXY_AUTHENTICATED_EMAILS_FILE` | `""` + `/etc/oauth2-proxy/authenticated-emails.txt`, with the `*staff-allowlist` volume | Only people on the staff list ([`quarantine staff`](/platform/cli/staff/)). Never `"*"`: anyone can register on Zitadel's login page |
 | `OAUTH2_PROXY_UPSTREAMS` | `static://202` | Traefik does the proxying; oauth2-proxy only answers `/oauth2/auth` |
 | `OAUTH2_PROXY_REDIRECT_URL` | `https://<sub>.${DOMAIN}/oauth2/callback` | Must match the catalog |
 | `OAUTH2_PROXY_COOKIE_DOMAINS`, `OAUTH2_PROXY_WHITELIST_DOMAINS` | `.${DOMAIN}` | Only for multi-host apps, so the cookie and the `rd` return URL work on the API host too |
