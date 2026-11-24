@@ -41,4 +41,6 @@ apps:
   - name: docs
     version: dev
   - name: garage
+  - name: wishora
+    version: dev
 observability: false

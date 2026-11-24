@@ -482,3 +482,28 @@ apps:
       wildcard-cert router on the same host. Public by design, so it is not
       behind oauth2-proxy and carries no secrets. Deployed by that repo's
       deploy.yml on the prod runner.
+
+  - name: wishora
+    kind: app
+    compose_path: apps/first-party/wishora/compose.yaml
+    subdomain: wishora
+    needs_db: false
+    needs_oidc: true
+    oidc_redirect_uris:
+      - "https://wishora.${DOMAIN}/oauth2/callback"
+    generated_secrets:
+      # Encrypts the backend's session cookie (A256GCM, needs 32 raw bytes,
+      # hence hex32). Rotating it only logs everyone out.
+      - key: session_secret
+        env: WISHORA_SESSION_SECRET
+        generator: hex32
+    notes: >-
+      Event pages with a gift list guests reserve from, from
+      QuarantineAl/wishora. Two images (backend NestJS, frontend Next.js), so
+      it uses QuarantineAl/.github's shared deploy-app.yml and pr-sandbox-*.yml
+      as-is. One hostname: /api and /oauth2 go to the backend, the rest to the
+      frontend. Login is native OIDC in the backend (kujtime's shape, not
+      lazzaretto's oauth2-proxy), because the landing page and guest pages are
+      public; its callback is /oauth2/callback so PR previews get working login
+      from the shared workflow's add-redirect step. No shared Postgres: SQLite
+      and images live in the wishora-data volume.

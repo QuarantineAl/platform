@@ -1,0 +1,87 @@
+# apps/first-party/wishora/compose.yaml — wishora.${DOMAIN}
+# (catalog.yaml: wishora, repo QuarantineAl/wishora)
+#
+# Two containers behind ONE hostname: Traefik sends /api/* and /oauth2/* to
+# the backend and everything else to the frontend. One origin means no CORS
+# and a plain host-only session cookie.
+#
+# Login is done by the backend itself (native OIDC, like kujtime), not by
+# oauth2-proxy: the landing page and the guest event pages must stay public.
+# Its callback is /oauth2/callback, the same path pr-sandbox-up.yml registers
+# for every PR preview, so previews get working login with no extra wiring.
+#
+# Everything is templated off SUBDOMAIN so the same file serves the
+# persistent app (wishora) and each PR preview (pr-<n>-wishora).
+
+services:
+  wishora-backend:
+    image: ghcr.io/quarantineal/wishora-backend:${WISHORA_VERSION:-CHANGEME}
+    container_name: quarantine-${SUBDOMAIN:-wishora}-backend
+    restart: unless-stopped
+    profiles: [wishora]
+    init: true
+    networks:
+      - edge
+    environment:
+      PUBLIC_ORIGIN: https://${SUBDOMAIN:-wishora}.${DOMAIN}
+      ZITADEL_ISSUER_URL: https://auth.${DOMAIN}
+      OIDC_CLIENT_ID_WISHORA: ${OIDC_CLIENT_ID_WISHORA}
+      OIDC_CLIENT_SECRET_WISHORA: ${OIDC_CLIENT_SECRET_WISHORA}
+      WISHORA_SESSION_SECRET: ${WISHORA_SESSION_SECRET}
+    # SQLite and uploaded images will live here. Each PR preview is its own
+    # Compose project, so it gets its own empty volume.
+    volumes:
+      - wishora-data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3001/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    # Starting points, not measurements. Revisit once there's real traffic.
+    mem_limit: 384m
+    labels:
+      - traefik.enable=true
+      - traefik.http.services.${SUBDOMAIN:-wishora}-backend.loadbalancer.server.port=3001
+      - traefik.http.routers.${SUBDOMAIN:-wishora}-backend.rule=Host(`${SUBDOMAIN:-wishora}.${DOMAIN}`) && (PathPrefix(`/api/`) || PathPrefix(`/oauth2/`))
+      - traefik.http.routers.${SUBDOMAIN:-wishora}-backend.entrypoints=websecure
+      - traefik.http.routers.${SUBDOMAIN:-wishora}-backend.tls=true
+      - traefik.http.routers.${SUBDOMAIN:-wishora}-backend.priority=100
+      - traefik.http.routers.${SUBDOMAIN:-wishora}-backend.service=${SUBDOMAIN:-wishora}-backend
+
+  wishora-frontend:
+    image: ghcr.io/quarantineal/wishora-frontend:${WISHORA_VERSION:-CHANGEME}
+    container_name: quarantine-${SUBDOMAIN:-wishora}-frontend
+    restart: unless-stopped
+    profiles: [wishora]
+    init: true
+    depends_on:
+      - wishora-backend
+    networks:
+      - edge
+    environment:
+      # Server-side calls from Next.js go straight to the backend container.
+      # The container name (not the service name) is unique per preview.
+      BACKEND_INTERNAL_URL: http://quarantine-${SUBDOMAIN:-wishora}-backend:3001
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    mem_limit: 384m
+    labels:
+      - traefik.enable=true
+      - traefik.http.services.${SUBDOMAIN:-wishora}-frontend.loadbalancer.server.port=3000
+      - traefik.http.routers.${SUBDOMAIN:-wishora}.rule=Host(`${SUBDOMAIN:-wishora}.${DOMAIN}`)
+      - traefik.http.routers.${SUBDOMAIN:-wishora}.entrypoints=websecure
+      - traefik.http.routers.${SUBDOMAIN:-wishora}.tls=true
+      - traefik.http.routers.${SUBDOMAIN:-wishora}.priority=10
+      - traefik.http.routers.${SUBDOMAIN:-wishora}.service=${SUBDOMAIN:-wishora}-frontend
+
+networks:
+  edge:
+    external: true
+
+volumes:
+  wishora-data:
