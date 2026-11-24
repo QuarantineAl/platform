@@ -128,8 +128,10 @@ Leave `false` alone if the app genuinely needs neither. Otherwise:
   path-style addressing.
 - **`needs_oidc: true`** — add an `oidc_redirect_uris` list (see the
   uptime-kuma entry above for the shape). `provisioners/zitadel.sh` will
-  automatically create the Zitadel project (shared, `quarantine-apps`) and
-  one OIDC application for this entry. This catalog flip is only the first
+  automatically create the app's own Zitadel project (catalog
+  `zitadel_project`, default the app's name; Lazzaretto uses
+  `quarantine-apps`), its roles (`zitadel_roles`) and one OIDC application.
+  The project's role check is on unless `zitadel_role_check: false`. This catalog flip is only the first
   step, not the whole thing — see `docs/adding-oidc-to-your-app.md` for the
   oauth2-proxy consumer block and Traefik middleware wiring the app
   actually needs to be fronted.

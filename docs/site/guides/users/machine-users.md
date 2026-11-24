@@ -37,8 +37,9 @@ Credentials, a CI secret); never into a page, ticket or chat.
 Zitadel's token endpoint is `https://auth.<domain>/oauth/v2/token` and accepts
 `client_secret_basic` or `client_secret_post`. The access token's audience is
 set with the scope `urn:zitadel:iam:org:project:id:<project-id>:aud`, where
-`<project-id>` is the `quarantine-apps` project id (`quarantine app list-roles
-<app>` prints it; it is also `core.zitadel.project_id` in the secrets).
+`<project-id>` is the id of the app's own Zitadel project (`quarantine app
+list-roles <app>` prints it). For Lazzaretto that is `quarantine-apps`, also
+`core.zitadel.project_id` in the secrets.
 
 ```bash title="Anywhere with HTTPS access (laptop, n8n, CI)"
 export ISSUER=https://auth.quarantine.al

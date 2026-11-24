@@ -205,8 +205,9 @@ Two things worth knowing if you're extending `zitadel.sh`:
   TCP connection was actually addressed. Omitting it fails with
   `{"code":5,"message":"... Instance not found"}` (verified empirically).
 
-One project (`quarantine-apps`) holds one OIDC application per catalog app
-needing `needs_oidc`; `client_id`/`client_secret` are captured and
+Each catalog app with `needs_oidc` gets its own project (catalog
+`zitadel_project`, default the app's name; Lazzaretto keeps the original
+`quarantine-apps`) holding its roles and one OIDC application; `client_id`/`client_secret` are captured and
 persisted immediately (Zitadel only returns the secret once, at creation).
 If a prior provisioning run created the Zitadel-side application but was
 killed before persisting its credentials, the next run finds it by name

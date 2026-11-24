@@ -60,6 +60,7 @@ graph, but it is not in dev's manifest and was not running on 2026-10-23.
 | Learn the `quarantine` command | [The quarantine CLI](/platform/cli/) |
 | Give someone an account | [Add a user](/platform/guides/users/add-a-user/) |
 | Fix "email not verified" at sign-in | [Verify a user's email](/platform/guides/users/verify-email/) |
+| Let people make their own account | [Self sign-up](/platform/guides/users/self-sign-up/) |
 | Give someone admin rights in an app | [Grant a role](/platform/guides/users/grant-a-role/) |
 | Let an automation call an API | [Machine users](/platform/guides/users/machine-users/) |
 | Add a new app to the platform | [Add an app](/platform/guides/apps/add-an-app/) |

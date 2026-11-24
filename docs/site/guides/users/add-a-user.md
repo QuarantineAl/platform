@@ -72,7 +72,8 @@ verify-email procedure).
 ## 3. What the user can now reach
 
 An account on its own opens only Wishora: anyone can register on Zitadel's
-login page, so every other app's Zitadel project requires a role.
+login page ([Self sign-up](/platform/guides/users/self-sign-up/)), so every
+other app's Zitadel project requires a role.
 
 - **An app** (kujtime, bem, docs, n8n, ...): grant its access role,
   `quarantine user grant <email> <app> <app>:access` (or `<app>:admin`). See
