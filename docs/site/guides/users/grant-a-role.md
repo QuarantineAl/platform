@@ -21,7 +21,7 @@ quarantine app list-roles lazzaretto
 ```
 
 ```text title="dev, 2026-10-23"
-[quarantine] roles on project 'quarantine-apps' (<project-id>), shared by every app in it:
+[quarantine] roles on project 'quarantine-apps' (<project-id>):
 kujtime:admin
 lazzaretto-admin
 smoketest-role
@@ -89,7 +89,7 @@ Revoking the last role deletes the user's grant entirely.
 - New applications created by `quarantine start` get
   `idTokenUserinfoAssertion: true` (email and name inside the ID token) but no
   role-assertion setting. If an app's role check never matches, check these
-  two settings in the Console (Project `quarantine-apps` → application →
+  two settings in the Console (the app's project → application →
   Token Settings) before changing code.
 
 Machine users get roles the same way: `quarantine machine grant`. See

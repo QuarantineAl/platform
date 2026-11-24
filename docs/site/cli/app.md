@@ -196,7 +196,7 @@ Read-only. Lists every role on the app's project.
 
 ```text title="Output on dev, 2026-10-23"
 [quarantine] using existing Zitadel project 'quarantine-apps' (<project-id>)
-[quarantine] roles on project 'quarantine-apps' (<project-id>), shared by every app in it:
+[quarantine] roles on project 'quarantine-apps' (<project-id>):
 kujtime:admin
 lazzaretto-admin
 smoketest-role

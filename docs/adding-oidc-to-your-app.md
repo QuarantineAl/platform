@@ -206,8 +206,8 @@ every future first-party app should be able to just follow it.
   - `urn:zitadel:iam:user:resourceowner` — the user's Zitadel org id.
   - `urn:zitadel:iam:org:projects:roles` — plural, no project id needed.
     Requests the `urn:zitadel:iam:org:project:<id>:roles` claim for
-    whichever Zitadel project your app's OIDC client belongs to (the
-    shared `quarantine-apps` project for every catalog app today) —
+    whichever Zitadel project your app's OIDC client belongs to (each
+    app has its own project; Lazzaretto's is `quarantine-apps`) —
     without your app or this compose file ever needing to know that
     project's id statically. If a role claim you expect isn't showing up
     in the forwarded token, check the Zitadel application's own "User
