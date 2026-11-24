@@ -18,7 +18,7 @@ default policy, so there is nothing to set per org.
 | Environment | Sign-up | Since |
 |---|---|---|
 | dev | on | always |
-| prod | off | 2026-11-24, while every app got its own role check |
+| prod | on | 2026-11-24 (off earlier that day while every app got its own role check) |
 
 ## What a new account can open
 
