@@ -40,4 +40,5 @@ apps:
     version: dev
   - name: docs
     version: dev
+  - name: garage
 observability: false
