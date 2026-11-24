@@ -78,11 +78,11 @@
 #   is deliberately not in any manifest, so omitting the export deploys a
 #   literal :CHANGEME tag.
 #
-# * OAUTH2_PROXY_EMAIL_DOMAINS IS EMPTIED. An allowlist alongside the default
-#   "*" is a SILENT no-op — oauth2-proxy's validator ends with
-#   `if allowAll { valid = true }`, discarding the allowlist result. Left as
-#   "*", every tenant's allowlist would admit every authenticated user and
-#   the container boundary would be the only separation left.
+# * OAUTH2_PROXY_EMAIL_DOMAINS MUST STAY "". An allowlist alongside "*" is a
+#   SILENT no-op — oauth2-proxy's validator ends with
+#   `if allowAll { valid = true }`, discarding the allowlist result. The
+#   compose block now hardcodes "" for every Lazzaretto instance, so a
+#   tenant only has to point LAZZARETTO_ALLOWLIST_FILE at its own list.
 #
 # * `add` IS NOT ATOMIC and does not pretend to be. Its steps are ordered so
 #   only the last is expensive to undo, every step is individually idempotent
@@ -417,9 +417,6 @@ tenant_up() {
   export DOMAIN
   export LAZZARETTO_VERSION="$version"
   export LAZZARETTO_ALLOWLIST_FILE; LAZZARETTO_ALLOWLIST_FILE="$(tenant_allowlist "$t")"
-  # Empty, not unset: this is what turns oauth2-proxy's allowAll off so the
-  # allowlist is actually consulted. See the header.
-  export LAZZARETTO_EMAIL_DOMAINS=""
   export LAZZARETTO_CLI_MAX_CONCURRENT="$concurrency"
   local mem_mib; mem_mib="$(tenant_mem_limit_mib "$concurrency")"
   export LAZZARETTO_MEM_LIMIT="${mem_mib}m"
@@ -508,7 +505,6 @@ tenant_compose() {
   export SUBDOMAIN; SUBDOMAIN="$(tenant_subdomain "$t")"
   export DOMAIN
   export LAZZARETTO_ALLOWLIST_FILE; LAZZARETTO_ALLOWLIST_FILE="$(tenant_allowlist "$t")"
-  export LAZZARETTO_EMAIL_DOMAINS=""
   local version; version="$(conf_get "$t" version)"; export LAZZARETTO_VERSION="${version:-$env}"
   qcompose_scoped "$(tenant_project "$t")" "$env" \
     -f "$COMPOSE_APP" -f "$COMPOSE_PROXY" --profile "$APP_NAME" "$@"

@@ -22,6 +22,19 @@
 #   oidc_redirect_uris
 #                 redirect URIs registered on the OIDC client. Only present
 #                 when needs_oidc is true.
+#   zitadel_project
+#                 the Zitadel project the app's OIDC client lives in.
+#                 Default: the app's own name. Only Lazzaretto sets it
+#                 (quarantine-apps, the original shared project).
+#   zitadel_role_check
+#                 default true: Zitadel refuses to log anyone in to this app
+#                 unless they hold one of its roles (`quarantine user grant`).
+#                 Anyone can register on the login page, so only a public
+#                 app (Wishora) sets this to false.
+#   zitadel_roles roles `quarantine start` creates on the app's project.
+#                 Keys keep the app prefix ("kujtime:admin") because apps
+#                 match on the key. Most apps have <app>:access and
+#                 <app>:admin.
 #   generated_secrets
 #                 optional list of app-owned secrets the platform generates
 #                 and persists itself, rather than an operator supplying one.
@@ -53,6 +66,11 @@ apps:
     subdomain: lazzaretto
     needs_db: false
     needs_oidc: true
+    zitadel_project: quarantine-apps
+    zitadel_roles:
+      - "lazzaretto-admin"
+      - "lazzaretto:access"
+      - "agent:invoke"
     oidc_redirect_uris:
       - "https://lazzaretto.${DOMAIN}/oauth2/callback"
     generated_secrets:
@@ -96,6 +114,9 @@ apps:
     subdomain: status
     needs_db: false
     needs_oidc: true
+    zitadel_roles:
+      - "uptime-kuma:access"
+      - "uptime-kuma:admin"
     oidc_redirect_uris:
       - "https://status.${DOMAIN}/oauth2/callback"
     notes: >-
@@ -112,6 +133,9 @@ apps:
     subdomain: vault
     needs_db: false
     needs_oidc: true
+    zitadel_roles:
+      - "vaultwarden:access"
+      - "vaultwarden:admin"
     oidc_redirect_uris:
       - "https://vault.${DOMAIN}/identity/connect/oidc-signin"
     generated_secrets:
@@ -155,6 +179,9 @@ apps:
     subdomain: n8n
     needs_db: true
     needs_oidc: true
+    zitadel_roles:
+      - "n8n:access"
+      - "n8n:admin"
     oidc_redirect_uris:
       - "https://n8n.${DOMAIN}/oauth2/callback"
     generated_secrets:
@@ -341,6 +368,9 @@ apps:
     subdomain: kujtime
     needs_db: true
     needs_oidc: true
+    zitadel_roles:
+      - "kujtime:access"
+      - "kujtime:admin"
     # Bootstraps the shared Application with one redirect URI so it's
     # never empty; NOT where a real city's callback lives. Every actual
     # city is added afterward with
@@ -397,6 +427,9 @@ apps:
     subdomain: delivery-note-ai
     needs_db: false
     needs_oidc: true
+    zitadel_roles:
+      - "delivery-note-ai:access"
+      - "delivery-note-ai:admin"
     oidc_redirect_uris:
       - "https://delivery-note-ai.${DOMAIN}/oauth2/callback"
     generated_secrets:
@@ -430,6 +463,9 @@ apps:
     subdomain: bem-poc
     needs_db: false
     needs_oidc: true
+    zitadel_roles:
+      - "bem:access"
+      - "bem:admin"
     oidc_redirect_uris:
       - "https://bem-poc.${DOMAIN}/oauth2/callback"
     notes: >-
@@ -457,14 +493,17 @@ apps:
     subdomain: docs
     needs_db: false
     needs_oidc: true
+    zitadel_roles:
+      - "docs:access"
+      - "docs:admin"
     oidc_redirect_uris:
       - "https://docs.${DOMAIN}/oauth2/callback"
     notes: >-
       The QuarantineAl knowledge base from QuarantineAl/docs: a static Astro
       Starlight site (nginx) assembled from every repository listed in that
       repo's sources.yaml. The whole host is behind oauth2-proxy-docs
-      (infra/edge/oauth2-proxy/compose.yaml) with EMAIL_DOMAINS "*": any
-      authenticated Zitadel user of the environment can read it, by design.
+      (infra/edge/oauth2-proxy/compose.yaml); Zitadel only lets in people with a
+      docs role (docs:access or docs:admin).
       No database, no volume, no secrets beyond the OIDC client. Built and
       deployed by the docs repo's own deploy.yml, every 30 minutes and on
       merge, redeploying only when a source commit changed.
@@ -489,6 +528,11 @@ apps:
     subdomain: wishora
     needs_db: false
     needs_oidc: true
+    zitadel_role_check: false
+    zitadel_roles:
+      - "wishora:admin"
+      - "wishora:moderator"
+      - "wishora:pilot"
     oidc_redirect_uris:
       - "https://wishora.${DOMAIN}/oauth2/callback"
     generated_secrets:

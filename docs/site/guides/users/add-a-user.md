@@ -71,21 +71,19 @@ verify-email procedure).
 
 ## 3. What the user can now reach
 
-An account on its own opens only apps that admit **any** signed-in user of that
-environment, that is, apps whose oauth2-proxy sets
-`OAUTH2_PROXY_EMAIL_DOMAINS: "*"` (checked in the running containers on
-2026-10-23):
+An account on its own opens only Wishora: anyone can register on Zitadel's
+login page, so every other app's Zitadel project requires a role.
 
-| Environment | Open to any signed-in user |
-|---|---|
-| dev | `lazzaretto.dev.quarantine.al` (shared instance and PR sandboxes), `delivery-note-ai.dev.quarantine.al` |
-| prod | `lazzaretto.quarantine.al` (shared instance), `n8n.quarantine.al` (the editor, which then has n8n's own login) |
-
-Everything else needs more:
-
+- **An app** (kujtime, bem, docs, n8n, ...): grant its access role,
+  `quarantine user grant <email> <app> <app>:access` (or `<app>:admin`). See
+  [Grant a role](/platform/guides/users/grant-a-role/). n8n then asks for its
+  own login too.
+- **The shared Lazzaretto instance**: a Lazzaretto role
+  (`quarantine user grant <email> lazzaretto lazzaretto-admin`) and the staff
+  list, `quarantine staff add <email>`. See [quarantine staff](/platform/cli/staff/).
 - **A Lazzaretto tenant** (`<tenant>-lazzaretto.quarantine.al`): add the email
   to the tenant's allowlist, `quarantine tenant member add <tenant> <email>`,
-  or give them their own tenant. See [quarantine tenant](/platform/cli/tenant/).
+  or give them their own tenant, plus a Lazzaretto role. See [quarantine tenant](/platform/cli/tenant/).
 - **Admin rights inside an app** (Lazzaretto admin, Kujtime admin): a project
   role. See [Grant a role](/platform/guides/users/grant-a-role/).
 - **Kujtime** signs people in itself; what a signed-in user can do there is

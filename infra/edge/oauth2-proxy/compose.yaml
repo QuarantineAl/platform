@@ -80,6 +80,19 @@
 #
 # PIN CHECKPOINT: quay.io/oauth2-proxy/oauth2-proxy:v7.15.3 (verified
 # 2026-07-26). Confirm before Phase 2.
+#
+# WHO GETS IN: Zitadel decides. Every app has its own Zitadel project with
+# "role required to log in" on (catalog.yaml: zitadel_project,
+# zitadel_role_check; provisioners/zitadel.sh keeps it on), so someone who
+# merely registered on the login page is refused by Zitadel before
+# oauth2-proxy ever sees them. That is why the single-app blocks below can
+# use EMAIL_DOMAINS "*". Grant access with
+# `quarantine user grant <email> <app> <app>:access`.
+#
+# Lazzaretto is the exception: the shared instance, its PR sandboxes and
+# every tenant share ONE Zitadel application, and tenant members hold
+# Lazzaretto roles, so Zitadel can't tell the instances apart. Each
+# Lazzaretto instance therefore also has an email allowlist (see its block).
 
 services:
   oauth2-proxy-uptime-kuma:
@@ -93,7 +106,13 @@ services:
       OAUTH2_PROXY_CLIENT_ID: ${OIDC_CLIENT_ID_UPTIME_KUMA}
       OAUTH2_PROXY_CLIENT_SECRET: ${OIDC_CLIENT_SECRET_UPTIME_KUMA}
       OAUTH2_PROXY_COOKIE_SECRET: ${OAUTH2_PROXY_COOKIE_SECRET}
+      # "*" is safe only because Zitadel already refused anyone without a
+      # role in this app's project: see "WHO GETS IN" at the top of this file.
       OAUTH2_PROXY_EMAIL_DOMAINS: "*"
+      # Zitadel only checks at login, and this proxy never asks it again
+      # during a session. A short session means a revoked role or deleted
+      # user is locked out within 12h instead of the 168h default.
+      OAUTH2_PROXY_COOKIE_EXPIRE: 12h
       OAUTH2_PROXY_REVERSE_PROXY: "true"
       OAUTH2_PROXY_HTTP_ADDRESS: 0.0.0.0:4180
       OAUTH2_PROXY_UPSTREAMS: static://202
@@ -245,15 +264,14 @@ services:
       # every other tenant. This is the single highest-consequence line in
       # this file.
       #
-      # Default "*" preserves today's behavior exactly for the persistent
-      # deployment and every PR sandbox, which want any authenticated user.
-      # `-` not `:-` on purpose: a per-tenant instance exports this as an
-      # EMPTY string to turn allowAll off, and `:-` would treat empty as
-      # unset and hand it right back "*". An empty domain list is fine
-      # alongside an allowlist — oauth2-proxy only rejects the config when
-      # email-domain, authenticated-emails-file AND htpasswd-file are all
-      # absent (pkg/validation/options.go).
-      OAUTH2_PROXY_EMAIL_DOMAINS: ${LAZZARETTO_EMAIL_DOMAINS-*}
+      # Always "": every instance (the shared one, PR sandboxes and tenants)
+      # admits only the emails in its allowlist file below. Zitadel's role
+      # check can't do this job alone: tenant members hold Lazzaretto roles
+      # too, and would otherwise reach the shared instance. An empty
+      # domain list is fine alongside an allowlist — oauth2-proxy only
+      # rejects the config when email-domain, authenticated-emails-file AND
+      # htpasswd-file are all absent (pkg/validation/options.go).
+      OAUTH2_PROXY_EMAIL_DOMAINS: ""
       # Checked AFTER the cookie/OIDC session is already valid, so it is an
       # authorization gate, not an authentication one. One address per line;
       # parsed as CSV, so `#` starts a comment and addresses are lowercased
@@ -328,26 +346,19 @@ services:
     networks:
       - edge
     volumes:
-      # Backs OAUTH2_PROXY_AUTHENTICATED_EMAILS_FILE above. Unset for the
-      # persistent deployment and every PR sandbox, where /dev/null stands
-      # in: oauth2-proxy opens it happily, parses zero records, and every
-      # lookup misses — harmless precisely because EMAIL_DOMAINS is still
-      # "*" for those instances. A per-tenant instance points this at its
-      # own allowlist and empties EMAIL_DOMAINS in the same breath.
+      # Backs OAUTH2_PROXY_AUTHENTICATED_EMAILS_FILE above. A per-tenant
+      # instance sets LAZZARETTO_ALLOWLIST_FILE to its own tenant allowlist;
+      # the shared instance and every PR sandbox leave it unset and get the
+      # staff allowlist (`quarantine staff`). The fallback path must match
+      # QUARANTINE_STAFF_FILE in lib/common.sh, so a host whose .env predates
+      # STAFF_ALLOWLIST_FILE still binds the right file. If the file is
+      # missing the container can't start: fail closed. `quarantine start`
+      # creates it (empty) when missing.
       #
-      # LONG SYNTAX with a `${VAR:-/dev/null}` source, deliberately, and
-      # both halves of that matter:
-      #   - A volumes ENTRY cannot be made to vanish through interpolation,
-      #     so `${VAR:+...}`-style gating does not work here — with the
-      #     variable unset it collapses to an empty string, which is not a
-      #     valid mount and fails to parse. The entry must always exist and
-      #     always resolve to a real path; /dev/null is that path.
-      #   - Short syntax ("${VAR:-/dev/null}:/etc/...:ro") parses as one
-      #     colon-delimited string, so it survives an unset variable only by
-      #     luck of the default and gives a far worse error when it doesn't.
-      #     Long syntax keeps source/target/read_only as separate keys.
-      # Verified with `docker compose config` on dev, prod and test, with
-      # the variable both set and unset.
+      # LONG SYNTAX, deliberately: short syntax ("${VAR:-...}:/etc/...:ro")
+      # parses as one colon-delimited string and gives a far worse error
+      # when a value is off. Long syntax keeps source/target/read_only as
+      # separate keys.
       #
       # The provisioner must rewrite this file IN PLACE (truncate + write),
       # never write-a-temp-then-rename: Docker binds a single-file mount by
@@ -355,7 +366,7 @@ services:
       # that goes on reading the original — the update would never be seen,
       # and no watcher event would fire either.
       - type: bind
-        source: ${LAZZARETTO_ALLOWLIST_FILE:-/dev/null}
+        source: ${LAZZARETTO_ALLOWLIST_FILE:-${STAFF_ALLOWLIST_FILE:-/opt/quarantine/staff/authenticated-emails.txt}}
         target: /etc/oauth2-proxy/authenticated-emails.txt
         read_only: true
     # No healthcheck — same reasoning as oauth2-proxy-uptime-kuma above.
@@ -457,7 +468,13 @@ services:
       OAUTH2_PROXY_CLIENT_ID: ${OIDC_CLIENT_ID_N8N}
       OAUTH2_PROXY_CLIENT_SECRET: ${OIDC_CLIENT_SECRET_N8N}
       OAUTH2_PROXY_COOKIE_SECRET: ${OAUTH2_PROXY_COOKIE_SECRET}
+      # "*" is safe only because Zitadel already refused anyone without a
+      # role in this app's project: see "WHO GETS IN" at the top of this file.
       OAUTH2_PROXY_EMAIL_DOMAINS: "*"
+      # Zitadel only checks at login, and this proxy never asks it again
+      # during a session. A short session means a revoked role or deleted
+      # user is locked out within 12h instead of the 168h default.
+      OAUTH2_PROXY_COOKIE_EXPIRE: 12h
       OAUTH2_PROXY_REVERSE_PROXY: "true"
       OAUTH2_PROXY_HTTP_ADDRESS: 0.0.0.0:4180
       OAUTH2_PROXY_UPSTREAMS: static://202
@@ -510,7 +527,13 @@ services:
       # Host-only cookie (no COOKIE_DOMAINS), but still a unique name so it can
       # never collide with Lazzaretto's parent-domain cookie in one header.
       OAUTH2_PROXY_COOKIE_NAME: _oauth2_proxy_delivery_note_ai
+      # "*" is safe only because Zitadel already refused anyone without a
+      # role in this app's project: see "WHO GETS IN" at the top of this file.
       OAUTH2_PROXY_EMAIL_DOMAINS: "*"
+      # Zitadel only checks at login, and this proxy never asks it again
+      # during a session. A short session means a revoked role or deleted
+      # user is locked out within 12h instead of the 168h default.
+      OAUTH2_PROXY_COOKIE_EXPIRE: 12h
       OAUTH2_PROXY_REVERSE_PROXY: "true"
       OAUTH2_PROXY_HTTP_ADDRESS: 0.0.0.0:4180
       OAUTH2_PROXY_UPSTREAMS: static://202
@@ -559,7 +582,13 @@ services:
       # Host-only cookie (no COOKIE_DOMAINS), but still a unique name so it can
       # never collide with Lazzaretto's parent-domain cookie in one header.
       OAUTH2_PROXY_COOKIE_NAME: _oauth2_proxy_bem
+      # "*" is safe only because Zitadel already refused anyone without a
+      # role in this app's project: see "WHO GETS IN" at the top of this file.
       OAUTH2_PROXY_EMAIL_DOMAINS: "*"
+      # Zitadel only checks at login, and this proxy never asks it again
+      # during a session. A short session means a revoked role or deleted
+      # user is locked out within 12h instead of the 168h default.
+      OAUTH2_PROXY_COOKIE_EXPIRE: 12h
       OAUTH2_PROXY_REVERSE_PROXY: "true"
       OAUTH2_PROXY_HTTP_ADDRESS: 0.0.0.0:4180
       OAUTH2_PROXY_UPSTREAMS: static://202
@@ -605,10 +634,13 @@ services:
       # Host-only cookie (no COOKIE_DOMAINS), but still a unique name so it can
       # never collide with Lazzaretto's parent-domain cookie in one header.
       OAUTH2_PROXY_COOKIE_NAME: _oauth2_proxy_docs
-      # Deliberately "*": every authenticated Zitadel user of this environment
-      # may read the knowledge base. Narrow it with an allowlist (the
-      # lazzaretto block above shows how) if that ever changes.
+      # "*" is safe only because Zitadel already refused anyone without a
+      # role in this app's project: see "WHO GETS IN" at the top of this file.
       OAUTH2_PROXY_EMAIL_DOMAINS: "*"
+      # Zitadel only checks at login, and this proxy never asks it again
+      # during a session. A short session means a revoked role or deleted
+      # user is locked out within 12h instead of the 168h default.
+      OAUTH2_PROXY_COOKIE_EXPIRE: 12h
       OAUTH2_PROXY_REVERSE_PROXY: "true"
       OAUTH2_PROXY_HTTP_ADDRESS: 0.0.0.0:4180
       OAUTH2_PROXY_UPSTREAMS: static://202

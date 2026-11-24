@@ -167,6 +167,12 @@ QUARANTINE_KEYS_DIR="${QUARANTINE_KEYS_DIR:-/opt/quarantine/keys}"
 # as the age private keys above.
 QUARANTINE_TENANTS_DIR="${QUARANTINE_TENANTS_DIR:-/opt/quarantine/tenants}"
 
+# The staff allowlist: the only people the shared Lazzaretto instance
+# lets in (see provisioners/staff.sh). Outside the repo for the same reason as
+# the tenant allowlists above. infra/edge/oauth2-proxy/compose.yaml falls back
+# to this same path, so keep the two in step.
+QUARANTINE_STAFF_FILE="${QUARANTINE_STAFF_FILE:-/opt/quarantine/staff/authenticated-emails.txt}"
+
 age_key_path() {
   local env="$1"
   printf '%s/age-%s.txt' "$QUARANTINE_KEYS_DIR" "$env"

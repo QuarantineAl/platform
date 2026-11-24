@@ -107,6 +107,7 @@ commit it. See [Secrets](/platform/guides/secrets/).
 | Apps | `app add`, `app remove`, `app add-redirect`, `app remove-redirect`, `app list-redirects`, `app add-role`, `app list-roles` | [app](/platform/cli/app/) |
 | People | `user add`, `user list`, `user show`, `user invite`, `user grant`, `user revoke`, `user remove` | [user](/platform/cli/user/) |
 | Service accounts | `machine onboard`, `machine add`, `machine list`, `machine show`, `machine grant`, `machine revoke`, `machine remove` | [machine](/platform/cli/machine/) |
+| Shared Lazzaretto access | `staff add`, `staff remove`, `staff list` | [staff](/platform/cli/staff/) |
 | Lazzaretto tenants | `tenant onboard`, `tenant add`, `tenant list`, `tenant show`, `tenant start`/`stop`/`restart`, `tenant logs`, `tenant upgrade`, `tenant upgrade-all`, `tenant remove`, `tenant purge`, `tenant member add`/`remove`/`list` | [tenant](/platform/cli/tenant/) |
 
 `quarantine help` (or `-h`, `--help`, or no argument) prints the built-in usage;
