@@ -675,6 +675,19 @@ generate_env_file() {
     printf 'OIDC_CLIENT_SECRET_%s=%s\n' "$oidc_var" "$oidc_secret" >> "$tmp"
   done <<< "$oidc_apps"
 
+  # S3 bucket and key for every needs_bucket app, same idea as the OIDC
+  # pairs above. Keys are empty until provisioners/garage.sh has run once.
+  local bucket_apps bucket_app bucket_var
+  bucket_apps="$(yq eval '.apps[] | select(.needs_bucket == true) | .name' "${repo_root}/catalog.yaml")" \
+    || die "failed to read catalog.yaml for needs_bucket apps — check for syntax errors"
+  while IFS= read -r bucket_app; do
+    [[ -z "$bucket_app" ]] && continue
+    bucket_var="$(printf '%s' "$bucket_app" | tr '[:lower:]-' '[:upper:]_')"
+    printf 'S3_BUCKET_%s=%s\n' "$bucket_var" "$bucket_app" >> "$tmp"
+    printf 'S3_ACCESS_KEY_ID_%s=%s\n' "$bucket_var" "$(secrets_get "$plaintext" ".apps[\"${bucket_app}\"].s3_access_key_id")" >> "$tmp"
+    printf 'S3_SECRET_ACCESS_KEY_%s=%s\n' "$bucket_var" "$(secrets_get "$plaintext" ".apps[\"${bucket_app}\"].s3_secret_access_key")" >> "$tmp"
+  done <<< "$bucket_apps"
+
   # This environment's manifest app list, read once and shared by the two
   # blocks below (generated secrets, then version vars) — both are driven by
   # "which apps does this environment actually run".
@@ -777,19 +790,42 @@ profile_services() {
 # stopped if it was started."
 reconcile_apps() {
   local repo_root="$1" env="$2" manifest="$3" plaintext="$4"
-  local count i app_name needs_db needs_oidc p
+  local count i app_name needs_db needs_oidc needs_bucket p
   local -a active_profiles=()
 
   count="$(yq eval '.apps | length' "$manifest")"
+
+  # Buckets can only be created once Garage is up, but apps normally all
+  # start together at the end of this function. So if any app here needs a
+  # bucket, start Garage on its own first.
+  local wants_bucket=false has_garage=false
+  for (( i = 0; i < count; i++ )); do
+    app_name="$(yq eval ".apps[$i].name" "$manifest")"
+    [[ "$app_name" == "garage" ]] && has_garage=true
+    [[ "$(catalog_field "$app_name" needs_bucket)" == "true" ]] && wants_bucket=true
+  done
+  if [[ "$wants_bucket" == true ]]; then
+    [[ "$has_garage" == true ]] \
+      || die "an app in environments/${env}/manifest.yaml has needs_bucket: true, but 'garage' is not in that manifest — run 'quarantine app add garage'"
+    log "starting garage (needed before provisioning buckets)"
+    qcompose "$env" --profile garage up -d garage
+    wait_healthy "quarantine-garage"
+  fi
+
   for (( i = 0; i < count; i++ )); do
     app_name="$(yq eval ".apps[$i].name" "$manifest")"
     [[ -z "$app_name" || "$app_name" == "null" ]] && continue
 
     needs_db="$(catalog_field "$app_name" needs_db)"
     needs_oidc="$(catalog_field "$app_name" needs_oidc)"
+    needs_bucket="$(catalog_field "$app_name" needs_bucket)"
 
     if [[ "$needs_db" == "true" ]]; then
       "${repo_root}/provisioners/postgres.sh" "$repo_root" "$env" "$plaintext" "$app_name"
+    fi
+
+    if [[ "$needs_bucket" == "true" ]]; then
+      "${repo_root}/provisioners/garage.sh" "$repo_root" "$env" "$plaintext" "$app_name"
     fi
 
     if [[ "$needs_oidc" == "true" ]]; then

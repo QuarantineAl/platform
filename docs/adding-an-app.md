@@ -24,6 +24,7 @@ from happening.
 | `subdomain` | The Traefik `Host()` label prefix; full host is `<subdomain>.${DOMAIN}`. |
 | `needs_db` | If `true`, `provisioners/postgres.sh` creates a database + role named after `name` (hyphens → underscores) before the app starts. |
 | `needs_oidc` | If `true`, `provisioners/zitadel.sh` creates a Zitadel project + OIDC client before the app starts, and the CLI injects `OIDC_CLIENT_ID_<APP>` / `OIDC_CLIENT_SECRET_<APP>`. |
+| `needs_bucket` | If `true`, `provisioners/garage.sh` creates an S3 bucket named after `name` and a key limited to it, and the CLI injects `S3_BUCKET_<APP>` / `S3_ACCESS_KEY_ID_<APP>` / `S3_SECRET_ACCESS_KEY_<APP>`. Needs `garage` in the same manifest. Optional. |
 | `oidc_redirect_uris` | Redirect URIs registered on the OIDC client. Only present when `needs_oidc` is true. |
 | `notes` | Free-text caveats — surfaced by `quarantine app add` and read by whoever's adding the next app. |
 
@@ -118,6 +119,13 @@ Leave `false` alone if the app genuinely needs neither. Otherwise:
   create a role + database named after `<name>` the first time `quarantine
   start` reconciles this app. No catalog field beyond the flag itself is
   required.
+- **`needs_bucket: true`** — `garage` must be in the same environment's
+  manifest. `quarantine start` starts Garage first, then
+  `provisioners/garage.sh` creates a bucket named `<name>` and an access
+  key that only works on it. Use `${S3_BUCKET_<APP>}`,
+  `${S3_ACCESS_KEY_ID_<APP>}` and `${S3_SECRET_ACCESS_KEY_<APP>}` in the
+  compose file, endpoint `http://garage:3900`, region `garage`, and
+  path-style addressing.
 - **`needs_oidc: true`** — add an `oidc_redirect_uris` list (see the
   uptime-kuma entry above for the shape). `provisioners/zitadel.sh` will
   automatically create the Zitadel project (shared, `quarantine-apps`) and

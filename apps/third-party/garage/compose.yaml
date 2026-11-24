@@ -1,0 +1,60 @@
+# apps/third-party/garage/compose.yaml — s3.${DOMAIN} (catalog.yaml: garage)
+#
+# Garage is the platform's S3-compatible object storage. Apps that set
+# `needs_bucket: true` in catalog.yaml get their own bucket and access key
+# from provisioners/garage.sh, and talk to it at http://garage:3900 over the
+# edge network. Browsers and outside clients use https://s3.${DOMAIN}.
+#
+# Things to know:
+# - Single node, one copy of each object. Back the volumes up off-host.
+# - Path-style URLs only (https://s3.${DOMAIN}/<bucket>/<key>). Set
+#   forcePathStyle: true (or the SDK's equivalent) and region "garage".
+# - No web UI. Use the CLI: docker exec quarantine-garage /garage <command>
+# - The image has no shell, so the healthcheck runs the garage binary itself.
+#
+# PIN CHECKPOINT: dxflrs/garage:v2.5.0 (latest stable, 2026-10-24). v2.3.0+
+# is required for `server --single-node`.
+
+services:
+  garage:
+    image: dxflrs/garage:${GARAGE_VERSION:-v2.5.0}
+    container_name: quarantine-garage
+    restart: unless-stopped
+    profiles: [garage]
+    # Creates the single-node cluster layout on first boot.
+    command: ["/garage", "server", "--single-node"]
+    environment:
+      GARAGE_RPC_SECRET: ${GARAGE_RPC_SECRET}
+      GARAGE_ADMIN_TOKEN: ${GARAGE_ADMIN_TOKEN}
+      GARAGE_METRICS_TOKEN: ${GARAGE_METRICS_TOKEN}
+    # Idle use is tens of MiB; this leaves room for large multipart uploads.
+    mem_limit: 512m
+    networks:
+      - edge
+    volumes:
+      - ./garage.toml:/etc/garage.toml:ro
+      - garage-meta:/var/lib/garage/meta
+      - garage-data:/var/lib/garage/data
+    healthcheck:
+      test: ["CMD", "/garage", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    labels:
+      - traefik.enable=true
+      - traefik.http.services.garage.loadbalancer.server.port=3900
+      # No forward-auth: every S3 request is signed with the app's own key,
+      # and presigned URLs must work from a plain browser.
+      - traefik.http.routers.garage.rule=Host(`s3.${DOMAIN}`)
+      - traefik.http.routers.garage.entrypoints=websecure
+      - traefik.http.routers.garage.tls=true
+      - traefik.http.routers.garage.service=garage
+
+networks:
+  edge:
+    external: true
+
+volumes:
+  garage-meta:
+  garage-data:
