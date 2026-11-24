@@ -787,9 +787,13 @@ fi
 # scans for in the urn:zitadel:iam:org:project:<id>:roles claim.
 # =============================================================================
 if [[ "$MODE" == "app-add-role" ]]; then
+  # Keys are read into a string first and grepped from a here-string: in a
+  # `yq ... | grep -q` pipeline under pipefail, grep can exit before yq has
+  # finished writing, yq dies of SIGPIPE, and an existing role reads as
+  # missing (seen live on dev, intermittently).
   roles_response="$(zitadel_call POST "/management/v1/projects/${project_id}/roles/_search" '{"query":{"limit":1000}}')" \
     || die "failed to list roles on project '${PROJECT_NAME}'"
-  if printf '%s' "$roles_response" | yq -p json '(.result // [])[].key' | grep -qxF "$role"; then
+  if grep -qxF "$role" <<<"$(printf '%s' "$roles_response" | yq -p json '(.result // [])[].key')"; then
     log "role '${role}' already exists on project '${PROJECT_NAME}' (${project_id}) — nothing to do"
     exit 0
   fi
@@ -951,7 +955,7 @@ if [[ "$MODE" == "user-grant" || "$MODE" == "user-revoke" ]]; then
   # code will ever match — a silent no-op that looks like success.
   roles_response="$(zitadel_call POST "/management/v1/projects/${project_id}/roles/_search" '{"query":{"limit":1000}}')" \
     || die "failed to list roles on project '${PROJECT_NAME}'"
-  if ! printf '%s' "$roles_response" | yq -p json '(.result // [])[].key' | grep -qxF "$role"; then
+  if ! grep -qxF "$role" <<<"$(printf '%s' "$roles_response" | yq -p json '(.result // [])[].key')"; then
     die "role '${role}' does not exist on project '${PROJECT_NAME}' — create it first: quarantine app add-role ${name} ${role}"
   fi
 
@@ -1136,7 +1140,7 @@ if [[ "$MODE" == "machine-grant" || "$MODE" == "machine-revoke" ]]; then
 
   roles_response="$(zitadel_call POST "/management/v1/projects/${project_id}/roles/_search" '{"query":{"limit":1000}}')" \
     || die "failed to list roles on project '${PROJECT_NAME}'"
-  if ! printf '%s' "$roles_response" | yq -p json '(.result // [])[].key' | grep -qxF "$role"; then
+  if ! grep -qxF "$role" <<<"$(printf '%s' "$roles_response" | yq -p json '(.result // [])[].key')"; then
     die "role '${role}' does not exist on project '${PROJECT_NAME}' — create it first: quarantine app add-role ${name} ${role}"
   fi
 
@@ -1277,7 +1281,7 @@ roles_response="$(zitadel_call POST "/management/v1/projects/${project_id}/roles
 while IFS= read -r want_role; do
   [[ -z "$want_role" ]] && continue
   [[ "$want_role" =~ ^[A-Za-z0-9._:-]+$ ]] || die "invalid role '${want_role}' in catalog.yaml for '${name}'"
-  if ! printf '%s' "$roles_response" | yq -p json '(.result // [])[].key' | grep -qxF "$want_role"; then
+  if ! grep -qxF "$want_role" <<<"$(printf '%s' "$roles_response" | yq -p json '(.result // [])[].key')"; then
     zitadel_call POST "/management/v1/projects/${project_id}/roles" \
       "$(printf '{"roleKey":"%s","displayName":"%s"}' "$want_role" "$want_role")" >/dev/null \
       || die "failed to add role '${want_role}' to project '${PROJECT_NAME}'"

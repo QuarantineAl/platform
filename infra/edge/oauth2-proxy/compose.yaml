@@ -109,6 +109,10 @@ services:
       # "*" is safe only because Zitadel already refused anyone without a
       # role in this app's project: see "WHO GETS IN" at the top of this file.
       OAUTH2_PROXY_EMAIL_DOMAINS: "*"
+      # Zitadel only checks at login, and this proxy never asks it again
+      # during a session. A short session means a revoked role or deleted
+      # user is locked out within 12h instead of the 168h default.
+      OAUTH2_PROXY_COOKIE_EXPIRE: 12h
       OAUTH2_PROXY_REVERSE_PROXY: "true"
       OAUTH2_PROXY_HTTP_ADDRESS: 0.0.0.0:4180
       OAUTH2_PROXY_UPSTREAMS: static://202
@@ -467,6 +471,10 @@ services:
       # "*" is safe only because Zitadel already refused anyone without a
       # role in this app's project: see "WHO GETS IN" at the top of this file.
       OAUTH2_PROXY_EMAIL_DOMAINS: "*"
+      # Zitadel only checks at login, and this proxy never asks it again
+      # during a session. A short session means a revoked role or deleted
+      # user is locked out within 12h instead of the 168h default.
+      OAUTH2_PROXY_COOKIE_EXPIRE: 12h
       OAUTH2_PROXY_REVERSE_PROXY: "true"
       OAUTH2_PROXY_HTTP_ADDRESS: 0.0.0.0:4180
       OAUTH2_PROXY_UPSTREAMS: static://202
@@ -522,6 +530,10 @@ services:
       # "*" is safe only because Zitadel already refused anyone without a
       # role in this app's project: see "WHO GETS IN" at the top of this file.
       OAUTH2_PROXY_EMAIL_DOMAINS: "*"
+      # Zitadel only checks at login, and this proxy never asks it again
+      # during a session. A short session means a revoked role or deleted
+      # user is locked out within 12h instead of the 168h default.
+      OAUTH2_PROXY_COOKIE_EXPIRE: 12h
       OAUTH2_PROXY_REVERSE_PROXY: "true"
       OAUTH2_PROXY_HTTP_ADDRESS: 0.0.0.0:4180
       OAUTH2_PROXY_UPSTREAMS: static://202
@@ -573,6 +585,10 @@ services:
       # "*" is safe only because Zitadel already refused anyone without a
       # role in this app's project: see "WHO GETS IN" at the top of this file.
       OAUTH2_PROXY_EMAIL_DOMAINS: "*"
+      # Zitadel only checks at login, and this proxy never asks it again
+      # during a session. A short session means a revoked role or deleted
+      # user is locked out within 12h instead of the 168h default.
+      OAUTH2_PROXY_COOKIE_EXPIRE: 12h
       OAUTH2_PROXY_REVERSE_PROXY: "true"
       OAUTH2_PROXY_HTTP_ADDRESS: 0.0.0.0:4180
       OAUTH2_PROXY_UPSTREAMS: static://202
@@ -621,6 +637,10 @@ services:
       # "*" is safe only because Zitadel already refused anyone without a
       # role in this app's project: see "WHO GETS IN" at the top of this file.
       OAUTH2_PROXY_EMAIL_DOMAINS: "*"
+      # Zitadel only checks at login, and this proxy never asks it again
+      # during a session. A short session means a revoked role or deleted
+      # user is locked out within 12h instead of the 168h default.
+      OAUTH2_PROXY_COOKIE_EXPIRE: 12h
       OAUTH2_PROXY_REVERSE_PROXY: "true"
       OAUTH2_PROXY_HTTP_ADDRESS: 0.0.0.0:4180
       OAUTH2_PROXY_UPSTREAMS: static://202
