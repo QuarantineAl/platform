@@ -26,3 +26,5 @@ apps:
   - name: n8n
   - name: website
     version: prod
+  - name: wishora
+    version: prod

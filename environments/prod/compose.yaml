@@ -46,6 +46,7 @@ include:
   # --- apps/first-party: profile-gated, one profile per catalog.yaml entry
   - path: ../../apps/first-party/lazzaretto/compose.yaml
   - path: ../../apps/first-party/website/compose.yaml
+  - path: ../../apps/first-party/wishora/compose.yaml
 
   # --- apps/third-party: profile-gated, one profile per catalog.yaml entry
   - path: ../../apps/third-party/uptime-kuma/compose.yaml
