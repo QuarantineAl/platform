@@ -37,6 +37,12 @@
 #                 key application data at rest, and minting a fresh one makes
 #                 everything encrypted under the old one permanently
 #                 unreadable.
+#   needs_bucket  if true, `provisioners/garage.sh` creates an S3 bucket
+#                 named after `name` plus an access key that can only use
+#                 that bucket, and the CLI injects S3_BUCKET_<APP>,
+#                 S3_ACCESS_KEY_ID_<APP> and S3_SECRET_ACCESS_KEY_<APP>.
+#                 Requires `garage` in the same environment's manifest.
+#                 Optional; missing means false.
 #   notes         free-text caveats surfaced by `quarantine app add` and in
 #                 docs/adding-an-app.md.
 
@@ -236,6 +242,37 @@ apps:
       which could front it with Zitadel later by flipping needs_oidc to
       true — deferred since the current small number of trusted operators
       doesn't need it yet.
+
+  - name: garage
+    kind: app
+    compose_path: apps/third-party/garage/compose.yaml
+    subdomain: s3
+    needs_db: false
+    needs_oidc: false
+    generated_secrets:
+      # Shared secret for Garage's internal RPC. Garage wants exactly 32
+      # bytes as hex, which is what hex32 produces.
+      - key: rpc_secret
+        env: GARAGE_RPC_SECRET
+        generator: hex32
+      # Bearer tokens for the admin API and /metrics. Both are bound to
+      # localhost inside the container (garage.toml), so nothing uses them
+      # today, but Garage needs them set to enable those endpoints.
+      - key: admin_token
+        env: GARAGE_ADMIN_TOKEN
+        generator: alnum32
+      - key: metrics_token
+        env: GARAGE_METRICS_TOKEN
+        generator: alnum32
+    notes: >-
+      S3-compatible object storage (Garage, single node). Other apps get a
+      bucket by setting needs_bucket: true; `quarantine start` brings Garage
+      up before provisioning them. Inside the platform the endpoint is
+      http://garage:3900, outside it is https://s3.${DOMAIN}; path-style
+      only, region "garage". One copy of each object, so back up the
+      garage-meta and garage-data volumes off-host. Removing an app keeps
+      its bucket and data, the same way removing a needs_db app keeps its
+      database. No web UI: use `docker exec quarantine-garage /garage ...`.
 
   - name: qualitech
     kind: app
