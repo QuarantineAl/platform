@@ -35,11 +35,12 @@
 # SIGNUPS_ALLOWED=false is NOT a complete stop on SSO-driven account
 # creation on every release (dani-garcia/vaultwarden#7050, open at time of
 # writing: an OIDC login can still provision a new local account for an
-# email that has never signed up, regardless of this flag). Treat Zitadel
-# itself — who has an account/who's a member of the org this Application
-# belongs to — as the real allow-list; this flag still correctly blocks
-# the plain email+master-password registration form, which is the other
-# half of what it's for.
+# email that has never signed up, regardless of this flag). The real
+# allow-list is the vaultwarden:access role in Zitadel (catalog.yaml):
+# Zitadel refuses the login for anyone who was not granted it with
+# `quarantine user grant`. This flag still blocks the plain
+# email+master-password registration form, which is the other half of
+# what it's for.
 #
 # needs_db: false in catalog.yaml — own SQLite file on a named volume,
 # same shape as uptime-kuma. Vaultwarden also supports DATABASE_URL
@@ -49,16 +50,21 @@
 # not done by default, to keep this app's footprint and failure surface
 # (one file vs. a shared server dependency) as small as uptime-kuma's.
 #
-# PIN CHECKPOINT: vaultwarden/server:1.37.1 (verified 2026-08-20 against
-# github.com/dani-garcia/vaultwarden/releases — latest stable). Confirm
-# before Phase 2.
+# PIN CHECKPOINT: vaultwarden/server:1.37.5 (latest stable on 2026-11-26,
+# per github.com/dani-garcia/vaultwarden/releases).
 
 services:
   vaultwarden:
-    image: vaultwarden/server:${VAULTWARDEN_VERSION:-1.37.1}
+    image: vaultwarden/server:${VAULTWARDEN_VERSION:-1.37.5}
     container_name: quarantine-vaultwarden
     restart: unless-stopped
     profiles: [vaultwarden]
+    # Usually sits well under 150 MB. The cap stops a runaway from taking
+    # memory away from the other apps on the host.
+    mem_limit: 256m
+    # The process can never gain more rights than it started with.
+    security_opt:
+      - no-new-privileges:true
     environment:
       # Full origin, not the bare platform ${DOMAIN} — see file header.
       DOMAIN: https://vault.${DOMAIN}
@@ -113,7 +119,9 @@ services:
     healthcheck:
       # /alive is unauthenticated and needs neither ADMIN_TOKEN nor an SSO
       # session — just liveness of the web server itself.
-      test: ["CMD-SHELL", "wget -qO- --no-verbose --tries=1 http://localhost/alive || exit 1"]
+      # curl, not wget: the image ships curl only. A failing check here
+      # makes Traefik drop the container, so the site would 404.
+      test: ["CMD-SHELL", "curl -fsS -o /dev/null http://localhost/alive || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
