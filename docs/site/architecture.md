@@ -118,6 +118,8 @@ for the full contract.
 
 Not every app uses this pattern:
 
+- **Garage UI** talks OIDC to Zitadel itself too. **Garage**'s S3 endpoint has
+  no sign-in at all: every request is signed with an app's own access key.
 - **Kujtime** and **Vaultwarden** talk OIDC to Zitadel themselves (public
   pages must stay anonymous, or native clients cannot carry a proxy cookie).
 - **Qualitech** and **Residences** are public static sites.
@@ -161,11 +163,19 @@ instance from the Host header). See the [Zitadel API cookbook](/platform/api/zit
   on first run and storing it in the environment's secrets.
 - **Redis (Valkey 9)** is defined in `infra/data/redis/` behind a `redis`
   profile with no consumer, so it never starts.
+- **Garage** is the S3-compatible file storage, one node per environment
+  (`s3.<domain>`, `http://garage:3900` inside the platform, region `garage`).
+  An app sets `needs_bucket: true` and `provisioners/garage.sh` gives it its
+  own bucket and a key that only works on it. Object data sits on a separate
+  disk mounted at `/srv/quarantine/garage-data` (10 GiB on dev, 100 GiB on
+  prod), so a full bucket can't fill the VM's root disk. The web UI is
+  `garage-ui` at `storage.<domain>`. See [Object storage
+  (Garage)](/platform/guides/apps/garage/).
 - Apps that keep their own state (Lazzaretto's SQLite, delivery-note-ai's
   uploads) use named Docker volumes.
 
 :::caution
-Volumes and Postgres are only backed up once `quarantine backup init` has
+Volumes (Garage's included) and Postgres are only backed up once `quarantine backup init` has
 been run on the host (see [Backups and restore](/platform/guides/backups/)).
 `quarantine destroy` keeps volumes, but that is not a backup.
 :::
