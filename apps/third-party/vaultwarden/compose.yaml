@@ -112,6 +112,20 @@ services:
       # single-user-per-email deployment.
       SSO_SIGNUPS_MATCH_EMAIL: "true"
 
+      # Outgoing mail: new-device warnings, organization invites, emergency
+      # access, password hints. Comes from core.smtp in the secrets and is
+      # off when no host is set there. Vaultwarden refuses to start with an
+      # empty SMTP_HOST or SMTP_FROM, even with mail off, so both fall back
+      # to placeholders that are never used.
+      _ENABLE_SMTP: ${SMTP_ENABLED:-false}
+      SMTP_HOST: ${SMTP_HOST:-disabled.invalid}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_SECURITY: starttls
+      SMTP_FROM: ${SMTP_FROM:-disabled@disabled.invalid}
+      SMTP_FROM_NAME: Vaultwarden
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+
       # PHC-format Argon2 hash (starts with $argon2id$), never a plain
       # string — see docs (backup/restore doc in the deployment writeup)
       # for how this is generated. Vaultwarden auto-detects the PHC shape

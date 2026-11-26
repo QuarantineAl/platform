@@ -152,6 +152,9 @@ One Zitadel instance per environment, served at `https://auth.<domain>`:
   It was set up by hand in the Console (Default Settings → SMTP Provider),
   not by the CLI. A rebuilt or new environment starts without it, and the
   operator hands codes over until it is added again.
+- **Mail from apps** is a separate setting: `core.smtp` in the environment's
+  secrets (host, port, username, password, from). Vaultwarden reads it and
+  runs with mail off when the host is empty. Zitadel does not read it.
 
 The CLI never calls Zitadel through the public URL. It runs a throwaway
 `curlimages/curl:8.11.1` container on the `edge` network and calls

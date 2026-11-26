@@ -633,6 +633,17 @@ generate_env_file() {
   local anthropic_api_key_kujtime
   anthropic_api_key_kujtime="$(secrets_get "$plaintext" '.apps["kujtime"].anthropic_api_key')"
 
+  # Outgoing mail for apps that can send it (today: Vaultwarden). Optional:
+  # with no host set, SMTP_ENABLED is false and apps start without mail.
+  # Zitadel has its own SMTP setting in its Console and does not read this.
+  local smtp_host smtp_port smtp_username smtp_password smtp_from smtp_enabled=false
+  smtp_host="$(secrets_get "$plaintext" '.core.smtp.host')"
+  smtp_port="$(secrets_get "$plaintext" '.core.smtp.port')"
+  smtp_username="$(secrets_get "$plaintext" '.core.smtp.username')"
+  smtp_password="$(secrets_get "$plaintext" '.core.smtp.password')"
+  smtp_from="$(secrets_get "$plaintext" '.core.smtp.from')"
+  [[ -n "$smtp_host" ]] && smtp_enabled=true
+
   {
     printf 'DOMAIN=%s\n' "$DOMAIN"
     printf 'ACME_EMAIL=%s\n' "$ACME_EMAIL"
@@ -653,6 +664,13 @@ generate_env_file() {
 
     printf 'OAUTH2_PROXY_COOKIE_SECRET=%s\n' "$oauth2_cookie_secret"
     printf 'STAFF_ALLOWLIST_FILE=%s\n' "$QUARANTINE_STAFF_FILE"
+
+    printf 'SMTP_ENABLED=%s\n' "$smtp_enabled"
+    printf 'SMTP_HOST=%s\n' "$smtp_host"
+    printf 'SMTP_PORT=%s\n' "$smtp_port"
+    printf 'SMTP_USERNAME=%s\n' "$smtp_username"
+    printf 'SMTP_PASSWORD=%s\n' "$smtp_password"
+    printf 'SMTP_FROM=%s\n' "${smtp_from:-$smtp_username}"
 
     printf 'GH_RUNNER_PAT=%s\n' "$github_runner_pat"
     # Harmless to set even for an environment whose compose.yaml doesn't
