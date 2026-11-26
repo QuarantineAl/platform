@@ -119,7 +119,9 @@ services:
     healthcheck:
       # /alive is unauthenticated and needs neither ADMIN_TOKEN nor an SSO
       # session — just liveness of the web server itself.
-      test: ["CMD-SHELL", "wget -qO- --no-verbose --tries=1 http://localhost/alive || exit 1"]
+      # curl, not wget: the image ships curl only. A failing check here
+      # makes Traefik drop the container, so the site would 404.
+      test: ["CMD-SHELL", "curl -fsS -o /dev/null http://localhost/alive || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
