@@ -48,6 +48,8 @@ containers on 2026-10-23. The full, always-current list is generated at
 | SearXNG | yes | yes | internal only (`http://quarantine-searxng:8080`) | none, not routed |
 | n8n | no | yes | `n8n.<domain>` | oauth2-proxy |
 | Portainer | no | yes | `portainer.<domain>` | Portainer's own login |
+| [Garage](/platform/guides/apps/garage/) (S3 file storage) | yes | yes | `s3.<domain>`, inside the platform `http://garage:3900` | each app's own S3 key |
+| [Garage UI](/platform/guides/apps/garage/) | yes | yes | `storage.<domain>` | native OIDC in the app |
 
 [Residences](/apps/residences/) has a catalog entry and is in dev's compose
 graph, but it is not in dev's manifest and was not running on 2026-10-23.
@@ -64,6 +66,7 @@ graph, but it is not in dev's manifest and was not running on 2026-10-23.
 | Give someone admin rights in an app | [Grant a role](/platform/guides/users/grant-a-role/) |
 | Let an automation call an API | [Machine users](/platform/guides/users/machine-users/) |
 | Add a new app to the platform | [Add an app](/platform/guides/apps/add-an-app/) |
+| Store files (uploads, images, documents) | [Object storage (Garage)](/platform/guides/apps/garage/) |
 | Put an app behind Zitadel sign-in | [Add OIDC to an app](/platform/guides/apps/add-oidc/) |
 | Understand how a merge reaches a VM | [Deploys](/platform/guides/apps/deploy/) |
 | Get a preview URL for a pull request | [PR sandboxes](/platform/guides/pr-sandboxes/) |

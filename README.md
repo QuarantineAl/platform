@@ -129,6 +129,11 @@ never carry a proxy session cookie, so a forward-auth gate in front of the
 whole host would break them. See
 `apps/third-party/vaultwarden/compose.yaml`'s own header.
 
+The catalog also holds **garage** (S3-compatible file storage, subdomain
+`s3`) and **garage-ui** (its web UI, subdomain `storage`, native OIDC). Any
+app gets its own bucket and key by setting `needs_bucket: true`; see
+`docs/site/guides/apps/garage.md`.
+
 ```bash
 quarantine app add uptime-kuma --version 1.2.3
 quarantine app remove uptime-kuma
