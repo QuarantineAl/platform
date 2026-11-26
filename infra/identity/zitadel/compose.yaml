@@ -144,7 +144,8 @@ services:
     container_name: quarantine-zitadel-login
     restart: unless-stopped
     # Memory cap, well above normal use, so a runaway cannot starve the other containers.
-    mem_limit: 512m
+    # 1g, not less: this is Node, which only uses about half of its cap for its heap.
+    mem_limit: 1g
     # The process can never gain more rights than it started with.
     security_opt:
       - no-new-privileges:true
