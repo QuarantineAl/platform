@@ -35,6 +35,12 @@
 #                 Keys keep the app prefix ("kujtime:admin") because apps
 #                 match on the key. Most apps have <app>:access and
 #                 <app>:admin.
+#   zitadel_signup_roles
+#                 optional: roles someone gets when they create their own
+#                 account through this app's "Sign up" (the login page's
+#                 Register form, reached from this app). Each must also be in
+#                 zitadel_roles. `quarantine start` keeps a Zitadel Action for
+#                 it; see provisioners/zitadel.sh. Only Wishora sets it.
 #   generated_secrets
 #                 optional list of app-owned secrets the platform generates
 #                 and persists itself, rather than an operator supplying one.
@@ -551,6 +557,8 @@ apps:
     zitadel_role_check: false
     zitadel_roles:
       - "wishora:admin"
+      - "wishora:user"
+    zitadel_signup_roles:
       - "wishora:user"
     oidc_redirect_uris:
       - "https://wishora.${DOMAIN}/oauth2/callback"

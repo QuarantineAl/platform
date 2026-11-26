@@ -1379,6 +1379,105 @@ while IFS= read -r want_role; do
   fi
 done < <(yq eval ".apps[] | select(.name == \"${name}\") | .zitadel_roles[]?" "$CATALOG_FILE")
 
+# --- roles for people who sign up through this app (zitadel_signup_roles) ----
+# Zitadel has no default role per project, so this is a Zitadel Action
+# (Actions v1) on the org's Internal Authentication flow, Post Creation
+# trigger. It runs when someone makes their own account with the login
+# page's Register form, never for `quarantine user add` or the Console. It
+# adds the roles only when the sign-up began at THIS app's login request
+# (ctx.v1.authRequest.applicationId is the OIDC client id), so the same
+# Register form reached from another app gives nothing. Existing accounts
+# are not touched.
+#
+# One action per app, named signupRoles_<app>: Zitadel calls the function
+# whose name equals the action's. allowedToFail, so a broken action never
+# blocks a sign-up; the person just ends up without the role, which can be
+# granted by hand. Removing zitadel_signup_roles removes the action on the
+# next start.
+#
+# Checked against Zitadel v4.16.1's source: runPostCreationActions in
+# internal/api/ui/login/custom_action.go, mapObjectToGrant in
+# internal/actions/object/user_grant.go, and ApplicationID = ClientID in
+# internal/api/oidc/auth_request_converter.go. Actions v1 run in the v1
+# login UI, which is the one this platform uses (see ensure-features).
+FLOW_INTERNAL_AUTHENTICATION=3   # domain.FlowTypeInternalAuthentication
+TRIGGER_POST_CREATION=3          # domain.TriggerTypePostCreation
+
+# set_post_creation_actions <json array of action ids>
+set_post_creation_actions() {
+  zitadel_call POST "/management/v1/flows/${FLOW_INTERNAL_AUTHENTICATION}/trigger/${TRIGGER_POST_CREATION}" \
+    "$(printf '{"actionIds":%s}' "$1")" >/dev/null \
+    || die "failed to set the actions on Zitadel's Internal Authentication / Post Creation trigger"
+}
+
+# ensure_signup_roles <client_id> — called once the app's client id is final.
+ensure_signup_roles() {
+  local app_client_id="$1"
+  local action_name="signupRoles_${name//[^A-Za-z0-9]/_}"
+  local roles_json all_roles want_role search_response action_id current_script
+  local flow_response trigger_ids script body
+
+  roles_json="$(yq eval -o json -I0 "[.apps[] | select(.name == \"${name}\") | .zitadel_signup_roles[]?]" "$CATALOG_FILE")"
+
+  search_response="$(zitadel_call POST /management/v1/actions/_search \
+    "$(printf '{"queries":[{"actionNameQuery":{"name":"%s","method":"TEXT_QUERY_METHOD_EQUALS"}}]}' "$action_name")")" \
+    || die "failed to search Zitadel actions"
+  action_id="$(printf '%s' "$search_response" | yq -p json '(.result // [])[0].id // ""')"
+  current_script="$(printf '%s' "$search_response" | yq -p json '(.result // [])[0].script // ""')"
+
+  flow_response="$(zitadel_call GET "/management/v1/flows/${FLOW_INTERNAL_AUTHENTICATION}")" \
+    || die "failed to read Zitadel's Internal Authentication flow"
+  trigger_ids="$(printf '%s' "$flow_response" | yq -p json -o json -I0 \
+    "[(.flow.triggerActions // [])[] | select(.triggerType.id == \"${TRIGGER_POST_CREATION}\") | .actions[].id]")"
+
+  if [[ "$roles_json" == "[]" ]]; then
+    [[ -n "$action_id" ]] || return 0
+    if grep -qxF "$action_id" <<<"$(printf '%s' "$trigger_ids" | yq -p json '.[]')"; then
+      set_post_creation_actions "$(printf '%s' "$trigger_ids" | yq -p json -o json -I0 "[.[] | select(. != \"${action_id}\")]")"
+    fi
+    zitadel_call DELETE "/management/v1/actions/${action_id}" >/dev/null \
+      || die "failed to delete the Zitadel action '${action_name}'"
+    log "removed the sign-up action '${action_name}': '${name}' has no zitadel_signup_roles"
+    return 0
+  fi
+
+  all_roles="$(yq eval ".apps[] | select(.name == \"${name}\") | .zitadel_roles[]?" "$CATALOG_FILE")"
+  while IFS= read -r want_role; do
+    grep -qxF "$want_role" <<<"$all_roles" \
+      || die "zitadel_signup_roles for '${name}' lists '${want_role}', which is not in its zitadel_roles"
+  done < <(printf '%s' "$roles_json" | yq -p json '.[]')
+
+  script="$(cat <<JS
+// Managed by the platform's provisioners/zitadel.sh (catalog.yaml
+// zitadel_signup_roles for '${name}'). Changes made here are overwritten.
+function ${action_name}(ctx, api) {
+  var request = ctx.v1.authRequest;
+  if (!request || request.applicationId !== "${app_client_id}") {
+    return;
+  }
+  api.v1.appendUserGrant({ projectID: "${project_id}", roles: ${roles_json} });
+}
+JS
+)"
+  body="$(N="$action_name" S="$script" yq -n -o json -I0 \
+    '.name = strenv(N) | .script = strenv(S) | .timeout = "10s" | .allowedToFail = true')"
+
+  if [[ -z "$action_id" ]]; then
+    action_id="$(zitadel_call POST /management/v1/actions "$body" | yq -p json '.id // ""')"
+    [[ -n "$action_id" ]] || die "failed to create the Zitadel action '${action_name}'"
+    log "created the sign-up action '${action_name}' (roles: ${roles_json})"
+  elif [[ "$current_script" != "$script" ]]; then
+    zitadel_call PUT "/management/v1/actions/${action_id}" "$body" >/dev/null \
+      || die "failed to update the Zitadel action '${action_name}'"
+    log "updated the sign-up action '${action_name}' (roles: ${roles_json})"
+  fi
+
+  if ! grep -qxF "$action_id" <<<"$(printf '%s' "$trigger_ids" | yq -p json '.[]')"; then
+    set_post_creation_actions "$(printf '%s' "$trigger_ids" | yq -p json -o json -I0 ". + [\"${action_id}\"]")"
+    log "'${action_name}' now runs after every self sign-up (Internal Authentication / Post Creation)"
+  fi
+}
+
 # --- the project id, for apps that read roles from a project-scoped claim ----
 # (Kujtime: urn:zitadel:iam:org:project:<id>:roles.) Written only when it
 # changes, because every write re-encrypts secrets.sops.yaml and leaves the
@@ -1406,6 +1505,7 @@ declare -a legacy_redirects=() legacy_logout_redirects=()
 if [[ -n "$client_id" && "$client_id" != CHANGEME* ]]; then
   if [[ -n "$(find_application_id "$name")" ]]; then
     log "Zitadel OIDC application for '${name}' already provisioned in project '${PROJECT_NAME}' — skipping"
+    ensure_signup_roles "$client_id"
     exit 0
   fi
   if [[ "$PROJECT_NAME" != "$LEGACY_PROJECT_NAME" ]]; then
@@ -1478,6 +1578,7 @@ if [[ -n "$existing_app_id" && "$existing_app_id" != "null" ]]; then
   secrets_set "$repo_root" "$env" "$client_id_key" "$existing_client_id"
   secrets_set "$repo_root" "$env" "$client_secret_key" "$new_secret"
   log "Zitadel OIDC application ready for '${name}' (client secret regenerated on an app found without persisted credentials)"
+  ensure_signup_roles "$existing_client_id"
   exit 0
 fi
 
@@ -1546,3 +1647,5 @@ if [[ -n "$legacy_app_id" ]]; then
   log "deleted the old '${name}' Application from '${LEGACY_PROJECT_NAME}'"
   warn "role grants for '${name}' made on '${LEGACY_PROJECT_NAME}' do not move: grant them again with 'quarantine user grant <email> ${name} <role>'"
 fi
+
+ensure_signup_roles "$new_client_id"
