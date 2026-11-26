@@ -24,7 +24,10 @@
 #
 # CONFIG (host config, /opt/quarantine/quarantine.yaml)
 #   backup:
-#     repository: sftp:backup@10.0.0.1:/srv/backups/prod   # or a local path
+#     repository: rest:http://10.0.0.1:8000/prod   # or sftp:..., or a local path
+#     keep_daily: 7                # optional, these three are the defaults
+#     keep_weekly: 4
+#     keep_monthly: 0
 #     ping_url: https://...        # optional, fetched after each good run
 #     exclude_volumes: ["pr-*"]    # optional, shell patterns
 #
@@ -51,8 +54,10 @@ require_cmd docker sops yq
 RESTIC_IMAGE="${QUARANTINE_RESTIC_IMAGE:-restic/restic:0.20.0}"
 SQLITE_IMAGE="${QUARANTINE_SQLITE_IMAGE:-python:3.13-alpine}"
 
-# How many backups to keep.
-KEEP_ARGS=(--keep-daily 7 --keep-weekly 4 --keep-monthly 6)
+# How many backups to keep, unless the host config says otherwise
+# (backup.keep_daily / keep_weekly / keep_monthly). Each backup only stores
+# what changed since the one before, so these cost little space.
+declare -A DEFAULT_KEEP=([daily]=7 [weekly]=4 [monthly]=0)
 
 # Volumes never backed up as raw files: Postgres is dumped instead, SigNoz is
 # telemetry we can lose, and the last one is restic's own cache.
@@ -107,6 +112,18 @@ restic() {
 
   RESTIC_PASSWORD="$password" RESTIC_REPOSITORY="$repo_in_container" \
     docker "${docker_args[@]}" "$RESTIC_IMAGE" "$@"
+}
+
+# keep_args — prints restic's --keep-* flags, one word per line.
+keep_args() {
+  local kind value
+  for kind in daily weekly monthly; do
+    value="$(yq_get "$config_file" ".backup.keep_${kind}")"
+    [[ -n "$value" ]] || value="${DEFAULT_KEEP[$kind]}"
+    [[ "$value" =~ ^[0-9]+$ ]] || die "backup.keep_${kind} must be a number, got '${value}'"
+    (( value > 0 )) && printf -- '--keep-%s\n%s\n' "$kind" "$value"
+  done
+  return 0
 }
 
 # volumes_to_back_up — one volume name per line.
@@ -212,7 +229,7 @@ sys.exit(1 if failed else 0)
 # --- init ------------------------------------------------------------------
 
 do_init() {
-  [[ $# -eq 1 ]] || die "usage: quarantine backup init <repository>   (e.g. sftp:backup@10.0.0.1:/srv/backups/${env}, or a local path)"
+  [[ $# -eq 1 ]] || die "usage: quarantine backup init <repository>   (e.g. rest:http://10.0.0.1:8000/${env}, sftp:backup@10.0.0.1:/srv/backups/${env}, or a local path)"
   local new_repo="$1"
   acquire_lock "$repo_root" "$env"
 
@@ -378,7 +395,12 @@ do_run() {
   log "removing old backups"
   # Only complete backups count towards what is kept. Otherwise a broken
   # run could push out the good backup from the same day.
-  restic forget --tag "${env},complete" --group-by host "${KEEP_ARGS[@]}" >&2 \
+  local keep_list
+  local -a keep=()
+  keep_list="$(keep_args)" || die "invalid backup retention settings"
+  mapfile -t keep <<< "$keep_list"
+  (( ${#keep[@]} >= 2 )) || die "backup retention keeps nothing — set at least one of backup.keep_daily/weekly/monthly"
+  restic forget --tag "${env},complete" --group-by host "${keep[@]}" >&2 \
     && restic forget --tag "${env},incomplete" --group-by host --keep-last 2 --prune >&2 \
     || warn "could not remove old backups (the new one is saved)"
 

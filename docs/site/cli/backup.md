@@ -24,7 +24,7 @@ quarantine backup status
 
 ```text title="Output"
 last successful backup: 2026-11-27T02:41:10Z (6 hour(s) ago)
-repository: sftp:backup@10.0.0.1:/srv/backups/prod
+repository: rest:http://10.0.0.1:8000/prod
 ```
 
 `status` exits with an error when the last good backup is older than 26
@@ -32,8 +32,8 @@ hours, so it can be used as a health check.
 
 ## Repository
 
-`<repository>` is either an SFTP address (`sftp:user@host:/path`) or a path
-on the host. The data is encrypted before it leaves the VM, with the
+`<repository>` is a restic REST server (`rest:http://host:8000/name`), an
+SFTP address (`sftp:user@host:/path`) or a path on the host. The data is encrypted before it leaves the VM, with the
 password at `.core.backup.password` in `secrets.sops.yaml`.
 
 ## Optional settings
@@ -42,9 +42,12 @@ In `/opt/quarantine/quarantine.yaml`:
 
 ```yaml
 backup:
-  repository: sftp:backup@10.0.0.1:/srv/backups/prod
+  repository: rest:http://10.0.0.1:8000/prod
   ping_url: https://status.example.com/api/push/abc   # fetched after each good run
   exclude_volumes: ["pr-*"]                           # volume name patterns to skip
+  keep_daily: 7                                       # how many backups to keep
+  keep_weekly: 4
+  keep_monthly: 0
 ```
 
 ## Notes

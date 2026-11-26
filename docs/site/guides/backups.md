@@ -31,6 +31,8 @@ inside an app that runs on this platform.
 
 You need a place to send backups to. Either:
 
+- **A restic REST server on another machine**: `rest:http://10.0.0.1:8000/prod`
+  (see [Run a backup server](#run-a-backup-server) below)
 - **Another machine over SFTP**: `sftp:backup@10.0.0.1:/srv/backups/prod`
 - **A path on this host** that is really another disk: `/mnt/backup-disk/prod`
 
@@ -38,7 +40,7 @@ A folder on the same physical disk as the VM protects against mistakes (a
 bad deploy, a deleted volume) but not against that disk failing.
 
 ```bash title="On the VM, as root"
-quarantine backup init sftp:backup@10.0.0.1:/srv/backups/prod
+quarantine backup init rest:http://10.0.0.1:8000/prod
 ```
 
 `init` does four things:
@@ -58,6 +60,24 @@ Then take the first backup by hand and look at the result:
 quarantine backup run
 quarantine backup list
 ```
+
+## Run a backup server
+
+The simplest target is restic's own small server, in a container on the
+machine that will hold the backups. It needs no system user and no SSH key.
+
+```bash title="On the machine that stores backups"
+mkdir -p ~/quarantine-backups
+docker run -d --name quarantine-backup-server --restart always \
+  --network host --user "$(id -u):$(id -g)" \
+  -v ~/quarantine-backups:/data \
+  restic/rest-server:0.15.0 rest-server --path /data --listen 10.0.0.1:8000 --no-auth
+```
+
+Replace `10.0.0.1` with an address **only the VM can reach** (the host's
+side of the VM network). `--no-auth` means anything that can reach the port
+can read and delete the encrypted backups, so never listen on a public or
+shared network.
 
 ## Check that it runs
 
@@ -80,8 +100,20 @@ marked `incomplete` in `backup list`, and `latest` never picks it.
 
 ## How long backups are kept
 
-7 daily, 4 weekly and 6 monthly complete backups, plus the last two
-incomplete ones. Older ones are removed after each run.
+By default: one backup per day for the last 7 days, and one per week for
+the last 4 weeks. Older ones are removed after each run. The last two
+incomplete backups are also kept, to help find out what went wrong.
+
+Keeping more backups costs little space. Each one only stores what changed
+since the one before, so 11 backups take roughly the size of the data once,
+plus the changes. Change the numbers in `/opt/quarantine/quarantine.yaml`:
+
+```yaml
+backup:
+  keep_daily: 7
+  keep_weekly: 4
+  keep_monthly: 0
+```
 
 ## Restore
 
