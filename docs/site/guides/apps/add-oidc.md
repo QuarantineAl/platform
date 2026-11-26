@@ -87,6 +87,10 @@ If the backend needs to know who the user is:
 - **Verify the JWT in the backend** (signature against
   `https://auth.<domain>/oauth/v2/keys`, issuer, expiry, audience). Do not trust
   forwarded headers alone.
+- The token's audience list holds the app's client ID **and its Zitadel
+  project ID**. An app that only accepts its own client ID rejects the login
+  (Vaultwarden: "is not a trusted audience"). Tell it to trust the project
+  ID too; `quarantine start` exports it as `ZITADEL_PROJECT_ID_<APP>`.
 - Read the issuer from an environment variable (`ZITADEL_ISSUER_URL` in
   Lazzaretto), never a literal.
 - `idTokenUserinfoAssertion` must be on, or the ID token has no email or name.

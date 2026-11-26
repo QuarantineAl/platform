@@ -12,6 +12,16 @@ roles (Lazzaretto's is `quarantine-apps`); keys keep the app prefix. A role in
 an app's project is also what lets someone log in to that app at all: most
 apps have `<app>:access` for that and `<app>:admin` for admin features.
 
+Someone without any role on an app sees this on the Zitadel login page:
+
+```text
+Login not possible. The user is required to have at least one grant on the
+application. Please contact your administrator. (APP-asb43)
+```
+
+That goes for a brand-new app too: nobody can log in to it, admins
+included, until the first `quarantine user grant`.
+
 Run on the VM of the environment where the user exists.
 
 ## 1. See which roles exist

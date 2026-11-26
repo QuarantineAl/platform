@@ -20,6 +20,19 @@
 # run from inside this host only; an external uptime probe is a separate,
 # out-of-scope concern (see docs/architecture.md).
 #
+# First start on a new environment (nothing here does it for you):
+#   1. Kuma waits on a setup page. Choose SQLite, then create the admin user.
+#      Save its password as apps.uptime-kuma.admin_password in the secrets
+#      and commit that through a PR.
+#   2. Optional: Settings -> Security -> Disable Auth. The Zitadel gate
+#      already protects the admin UI, so Kuma's own login is a second one.
+#      Prod has it off. Containers on the edge network can then reach the
+#      admin UI without a password.
+#   3. Add the monitors by hand. They live in the uptime-kuma-data volume,
+#      not in git, so the nightly backup is their only copy.
+# Kuma is on the edge network only. It can check apps by container name
+# (http://quarantine-n8n:5678/healthz) but cannot reach Postgres directly.
+#
 # PIN CHECKPOINT: louislam/uptime-kuma:2.4.0 (verified 2026-07-26). Confirm
 # before Phase 2.
 

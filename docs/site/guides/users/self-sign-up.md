@@ -35,9 +35,15 @@ To make a new app open to anyone with an account, set
 `zitadel_role_check: false` on its catalog entry (only do this when the app
 decides access itself). See [Add OIDC to an app](/platform/guides/apps/add-oidc/).
 
-## No email server yet
+## Without an email server
 
-Zitadel has no SMTP provider on dev or prod. For self sign-up that means:
+:::note
+Dev and prod have an SMTP provider since 2026-11-26. The points below
+describe an environment without one. They have not been re-checked with
+SMTP on, so test a sign-up before relying on either behaviour.
+:::
+
+Without an SMTP provider, self sign-up means:
 
 - The email is **not verified**. Zitadel still lets the person log in, and
   apps that talk to Zitadel themselves (Wishora) work. Apps behind

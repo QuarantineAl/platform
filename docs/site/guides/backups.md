@@ -79,6 +79,25 @@ side of the VM network). `--no-auth` means anything that can reach the port
 can read and delete the encrypted backups, so never listen on a public or
 shared network.
 
+## Where it is set up today
+
+| Environment | Backups |
+|---|---|
+| prod | Every night at 02:30 UTC to `rest:http://192.168.200.1:8000/prod` |
+| dev | None |
+
+Prod's backup server is the container `quarantine-backup-server` on the
+`homelab` host, started with the command above by user `ermal`. The data is
+in `~/quarantine-backups` there. Nothing in this repository creates that
+container, so after a rebuild of the homelab it has to be started again by
+hand.
+
+The homelab has one usable disk, which also holds the VMs. So these backups
+cover mistakes and a lost VM, not that disk failing.
+
+Prod's `backup.ping_url` points at the "Nightly backup" push monitor in
+prod's Uptime Kuma.
+
 ## Check that it runs
 
 ```bash
