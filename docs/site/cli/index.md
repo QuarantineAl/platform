@@ -109,6 +109,7 @@ commit it. See [Secrets](/platform/guides/secrets/).
 | Service accounts | `machine onboard`, `machine add`, `machine list`, `machine show`, `machine grant`, `machine revoke`, `machine remove` | [machine](/platform/cli/machine/) |
 | Shared Lazzaretto access | `staff add`, `staff remove`, `staff list` | [staff](/platform/cli/staff/) |
 | Self sign-up | `signup status`, `signup on`, `signup off` | [signup](/platform/cli/signup/) |
+| Backups | `backup init`, `backup run`, `backup list`, `backup status`, `backup restore`, `backup restore-volume` | [backup](/platform/cli/backup/) |
 | Lazzaretto tenants | `tenant onboard`, `tenant add`, `tenant list`, `tenant show`, `tenant start`/`stop`/`restart`, `tenant logs`, `tenant upgrade`, `tenant upgrade-all`, `tenant remove`, `tenant purge`, `tenant member add`/`remove`/`list` | [tenant](/platform/cli/tenant/) |
 
 `quarantine help` (or `-h`, `--help`, or no argument) prints the built-in usage;

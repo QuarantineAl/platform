@@ -165,8 +165,9 @@ instance from the Host header). See the [Zitadel API cookbook](/platform/api/zit
   uploads) use named Docker volumes.
 
 :::caution
-Nothing in the platform backs up volumes or Postgres. `quarantine destroy`
-keeps volumes, but that is not a backup.
+Volumes and Postgres are only backed up once `quarantine backup init` has
+been run on the host (see [Backups and restore](/platform/guides/backups/)).
+`quarantine destroy` keeps volumes, but that is not a backup.
 :::
 
 ## Observability
