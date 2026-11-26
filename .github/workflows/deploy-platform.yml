@@ -39,6 +39,7 @@ concurrency:
 
 jobs:
   deploy:
+    timeout-minutes: 30
     # Only two self-hosted labels exist, `quarantine-dev` and `quarantine-prod`,
     # emitted by the CLI itself (bin/quarantine's RUNNER_LABELS) into the env
     # file the runner compose reads. The label picks the HOST; it does not tell
