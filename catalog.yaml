@@ -551,8 +551,7 @@ apps:
     zitadel_role_check: false
     zitadel_roles:
       - "wishora:admin"
-      - "wishora:moderator"
-      - "wishora:pilot"
+      - "wishora:user"
     oidc_redirect_uris:
       - "https://wishora.${DOMAIN}/oauth2/callback"
     generated_secrets:
