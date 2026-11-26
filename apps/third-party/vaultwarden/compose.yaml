@@ -62,6 +62,9 @@ services:
     # Usually sits well under 150 MB. The cap stops a runaway from taking
     # memory away from the other apps on the host.
     mem_limit: 256m
+    # The process can never gain more rights than it started with.
+    security_opt:
+      - no-new-privileges:true
     environment:
       # Full origin, not the bare platform ${DOMAIN} — see file header.
       DOMAIN: https://vault.${DOMAIN}
