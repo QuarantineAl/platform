@@ -1,0 +1,11 @@
+# Keeps GitHub Actions and Docker base images up to date.
+# Updates are grouped so each ecosystem opens one PR a week.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]

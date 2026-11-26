@@ -39,14 +39,19 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   shellcheck:
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install shellcheck
-        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - uses: actions/checkout@v7
 
       - name: shellcheck every shell script in the repo
         shell: bash
@@ -66,6 +71,7 @@ jobs:
             provisioners/backup.sh
             scripts/new-app.sh
             lib/common.sh
+            infra/ci/github-runner/watchdog.sh
           )
           # -x: follow sourced files where shellcheck can resolve the path.
           # severity=warning: fail on warning-or-above only — this is what
@@ -74,9 +80,10 @@ jobs:
           shellcheck --severity=warning -x "${scripts[@]}"
 
   compose-validate:
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Write dummy .env for compose var interpolation
         shell: bash
