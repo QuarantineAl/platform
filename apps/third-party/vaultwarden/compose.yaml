@@ -94,6 +94,11 @@ services:
       SSO_AUTHORITY: https://auth.${DOMAIN}
       SSO_CLIENT_ID: ${OIDC_CLIENT_ID_VAULTWARDEN}
       SSO_CLIENT_SECRET: ${OIDC_CLIENT_SECRET_VAULTWARDEN}
+      # Zitadel also puts the app's project ID in the login token's
+      # audience list. Vaultwarden trusts only its own client ID unless
+      # told otherwise, and rejects the login with "is not a trusted
+      # audience". This is a regex; "$$" is a literal "$" in compose.
+      SSO_AUDIENCE_TRUSTED: ^${ZITADEL_PROJECT_ID_VAULTWARDEN}$$
       # openid is implicit; explicit here even though it matches
       # Vaultwarden's own default, so a future default change upstream
       # can't silently narrow what this deployment requests.
