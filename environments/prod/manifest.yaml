@@ -28,3 +28,4 @@ apps:
     version: prod
   - name: wishora
     version: prod
+  - name: vaultwarden
