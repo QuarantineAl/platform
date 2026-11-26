@@ -30,3 +30,5 @@ apps:
   - name: wishora
     version: prod
   - name: vaultwarden
+  - name: garage
+  - name: garage-ui
