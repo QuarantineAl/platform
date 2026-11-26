@@ -56,7 +56,8 @@ quarantine tenant onboard alice --email alice@example.com --invite \
   --given-name Alice --family-name Example
 ```
 
-Hand Alice the invite code it prints (no SMTP), and the URL
+Alice gets the invite by email (or hand her the code it prints, on an
+environment without SMTP), and the URL
 `https://alice-lazzaretto.quarantine.al`.
 
 ## tenant add

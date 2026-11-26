@@ -48,7 +48,8 @@ without changing the profile.
 
 `--password VALUE` is refused on purpose (argv is visible to other processes).
 The email is created **unverified**; Zitadel is asked to send a verification
-code, which it cannot do without SMTP.
+code, which only arrives if the environment has an SMTP provider (dev and
+prod do since 2026-11-26).
 
 :::caution
 Pass `--invite` or `--password-stdin`. Without either, the user exists with no
@@ -59,8 +60,9 @@ password and no code; fix it with `quarantine user invite <email>`.
 quarantine user add alice@example.com --given-name Alice --family-name Example --invite
 ```
 
-Neither environment has an SMTP provider, so the invite is printed for you to
-hand over:
+With an SMTP provider (dev and prod today) the invite is emailed and the
+command prints `invite emailed to alice@example.com`. Without one, or if the
+send fails, the invite is printed for you to hand over:
 
 ```text
 [quarantine] created Zitadel user 'alice@example.com' (<user-id>)

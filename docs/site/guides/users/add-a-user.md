@@ -19,8 +19,10 @@ Preferred: let them set their own password with an invite.
 quarantine user add alice@example.com --given-name Alice --family-name Example --invite
 ```
 
-Neither environment has an SMTP provider, so nothing is emailed. The command
-prints the code and a redemption URL instead:
+Dev and prod have an SMTP provider since 2026-11-26, so the invite is
+emailed and the command prints `invite emailed to alice@example.com`. On an
+environment without one, nothing is emailed and the command prints the code
+and a redemption URL instead:
 
 ```text
 [quarantine] created Zitadel user 'alice@example.com' (<user-id>)
@@ -31,7 +33,7 @@ prints the code and a redemption URL instead:
 [quarantine] WARN:   they redeem it at https://auth.dev.quarantine.al/ui/login/user/init?userID=<user-id>&code=6J0SI2
 ```
 
-Send the URL to the person over a private channel. Opening it lets them set a
+In that case, send the URL to the person over a private channel. Opening it lets them set a
 password. Lost code: `quarantine user invite alice@example.com` prints a new one.
 
 ### Alternative: set an initial password

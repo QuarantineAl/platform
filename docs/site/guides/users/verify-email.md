@@ -16,8 +16,9 @@ platform sets it. The person signs in to Zitadel successfully, then the app's
 `/oauth2/callback` fails.
 
 `quarantine user add` always creates the email **unverified** and asks Zitadel
-to send a verification code. Zitadel has **no SMTP provider** on dev or prod,
-so that code never arrives.
+to send a verification code. That code only arrives if the environment has
+an SMTP provider. Dev and prod have one since 2026-11-26; accounts made
+before that, and any environment without SMTP, still need this page.
 
 ## When you need this
 
@@ -120,4 +121,4 @@ Checked against Zitadel v4.16.1 on dev:
 - `POST /v2/users/{id}/email` with the user's **current** address (the route
   those docs suggest) returns **400**, because nothing changes.
 - There is no `quarantine user verify-email` command; this procedure is the
-  supported path until SMTP is configured.
+  supported path where SMTP is missing or the code was never delivered.

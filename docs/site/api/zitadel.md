@@ -222,8 +222,9 @@ z POST /zitadel.application.v2.ApplicationService/ListApplications \
 z POST /admin/v1/smtp/_search '{"query":{"limit":1}}'
 ```
 
-`{"details":{...}}` with no `result` means no SMTP provider (both dev and prod
-on 2026-10-23), so Zitadel cannot send invites or verification codes.
+`{"details":{...}}` with no `result` means no SMTP provider, so Zitadel cannot
+send invites or verification codes. Dev and prod both return one provider
+with `"state": "SMTP_CONFIG_ACTIVE"` (checked 2026-11-26).
 
 ## OIDC endpoints (no token needed)
 
