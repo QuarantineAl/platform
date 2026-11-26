@@ -43,4 +43,5 @@ apps:
   - name: garage
   - name: wishora
     version: dev
+  - name: garage-ui
 observability: false
