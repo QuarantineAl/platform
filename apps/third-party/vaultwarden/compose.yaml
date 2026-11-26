@@ -117,6 +117,19 @@ services:
       # for how this is generated. Vaultwarden auto-detects the PHC shape
       # and verifies via Argon2 instead of a plaintext compare.
       ADMIN_TOKEN: ${VAULTWARDEN_ADMIN_TOKEN}
+
+      # WARNING about the /admin page: "Save" there writes EVERY setting
+      # into /data/config.json, and that file wins over this environment
+      # block. After one Save, changes made here (SSO client, admin token,
+      # anything) are silently ignored.
+      #
+      # Outgoing mail (SMTP) is set in /admin on purpose, so it stays out
+      # of the platform's secrets. After each Save there, cut the file back
+      # to the mail settings and restart, on the VM as root:
+      #   f=/var/lib/docker/volumes/quarantine-<env>_vaultwarden-data/_data/config.json
+      #   yq -i -p json -o json 'with_entries(select(.key | test("^(smtp_|_enable_smtp$|use_sendmail$)")))' "$f"
+      #   docker restart quarantine-vaultwarden
+      # "Send test email" does not save, so it needs no clean-up.
     networks:
       - edge
     volumes:
