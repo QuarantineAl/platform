@@ -40,7 +40,7 @@
 #                 account through this app's "Sign up" (the login page's
 #                 Register form, reached from this app). Each must also be in
 #                 zitadel_roles. `quarantine start` keeps a Zitadel Action for
-#                 it; see provisioners/zitadel.sh. Only Wishora sets it.
+#                 it; see provisioners/zitadel.sh. Wishora and Kujtime set it.
 #   generated_secrets
 #                 optional list of app-owned secrets the platform generates
 #                 and persists itself, rather than an operator supplying one.
@@ -397,6 +397,11 @@ apps:
     zitadel_roles:
       - "kujtime:access"
       - "kujtime:admin"
+    # People who make their own account from Kujtime's "Sign up" can log in
+    # and submit memories. Reviewing and publishing for a city stays a
+    # per-city editor grant made inside the app, never a sign-up default.
+    zitadel_signup_roles:
+      - "kujtime:access"
     # Bootstraps the shared Application with one redirect URI so it's
     # never empty; NOT where a real city's callback lives. Every actual
     # city is added afterward with
