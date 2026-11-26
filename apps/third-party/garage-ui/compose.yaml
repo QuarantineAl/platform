@@ -1,0 +1,93 @@
+# apps/third-party/garage-ui/compose.yaml — storage.${DOMAIN} (catalog.yaml: garage-ui)
+#
+# Web UI for Garage (github.com/Noooste/garage-ui): browse and upload
+# objects, manage buckets and keys, see disk use. Needs `garage` in the same
+# manifest; it talks to Garage's admin API over the private garage-admin
+# network.
+#
+# Login is Garage UI's own OIDC client against Zitadel, no oauth2-proxy.
+# Zitadel only lets in people holding a role on the garage-ui project
+# (`quarantine user grant <email> garage-ui garage-ui:admin`), so everyone
+# who gets this far is an admin.
+#
+# Garage UI insists on an admin role read from the ID token, but Zitadel
+# sends roles as a nested map it can't read. So the "role" it checks is the
+# token's issuer, which every token Zitadel issues to this client carries.
+# The real gate is Zitadel's role check above.
+#
+# Buckets for apps still come from needs_bucket, never from this UI: a key
+# made here is not saved in secrets.sops.yaml.
+#
+# PIN CHECKPOINT: noooste/garage-ui:v0.14.0 (latest, 2026-10-14). Needs
+# Garage v2.1.0+.
+
+services:
+  garage-ui:
+    image: noooste/garage-ui:${GARAGE_UI_VERSION:-v0.14.0}
+    container_name: quarantine-garage-ui
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    profiles: [garage-ui]
+    depends_on:
+      garage:
+        condition: service_healthy
+    environment:
+      GARAGE_UI_SERVER_ROOT_URL: https://storage.${DOMAIN}
+      GARAGE_UI_SERVER_DOMAIN: storage.${DOMAIN}
+      GARAGE_UI_SERVER_ENVIRONMENT: production
+
+      GARAGE_UI_GARAGE_ENDPOINT: http://garage:3900
+      GARAGE_UI_GARAGE_REGION: garage
+      GARAGE_UI_GARAGE_ADMIN_ENDPOINT: http://garage:3903
+      GARAGE_UI_GARAGE_ADMIN_TOKEN: ${GARAGE_ADMIN_TOKEN}
+
+      GARAGE_UI_AUTH_OIDC_ENABLED: "true"
+      GARAGE_UI_AUTH_OIDC_PROVIDER_NAME: Quarantine
+      GARAGE_UI_AUTH_OIDC_ISSUER_URL: https://auth.${DOMAIN}
+      GARAGE_UI_AUTH_OIDC_CLIENT_ID: ${OIDC_CLIENT_ID_GARAGE_UI}
+      GARAGE_UI_AUTH_OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET_GARAGE_UI}
+      # Comma-separated: Garage UI splits this on commas.
+      GARAGE_UI_AUTH_OIDC_SCOPES: openid,email,profile
+      GARAGE_UI_AUTH_OIDC_COOKIE_SECURE: "true"
+      # See the file header for why the issuer stands in for a role.
+      GARAGE_UI_AUTH_OIDC_ROLE_ATTRIBUTE_PATH: iss
+      GARAGE_UI_AUTH_OIDC_ADMIN_ROLE: https://auth.${DOMAIN}
+
+      # Only Zitadel logins: no password form, no admin-token form.
+      GARAGE_UI_AUTH_ADMIN_ENABLED: "false"
+      GARAGE_UI_AUTH_TOKEN_ENABLED: "false"
+
+      # The browser only calls its own origin.
+      GARAGE_UI_CORS_ENABLED: "false"
+    # Uploads go through this container, so give it some headroom.
+    mem_limit: 256m
+    networks:
+      - edge
+      - garage-admin
+    volumes:
+      # Holds the session-signing key, so logins survive a restart.
+      - garage-ui-data:/app/data
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    labels:
+      - traefik.enable=true
+      - traefik.http.services.garage-ui.loadbalancer.server.port=8080
+      - traefik.http.routers.garage-ui.rule=Host(`storage.${DOMAIN}`)
+      - traefik.http.routers.garage-ui.entrypoints=websecure
+      - traefik.http.routers.garage-ui.tls=true
+      - traefik.http.routers.garage-ui.service=garage-ui
+
+networks:
+  edge:
+    external: true
+  garage-admin:
+    name: quarantine-garage-admin
+    internal: true
+
+volumes:
+  garage-ui-data:

@@ -65,3 +65,4 @@ include:
   # all — see docs/PLAN.md §7/§10 on this exact gap.
   - path: ../../apps/third-party/n8n/compose.yaml
   - path: ../../apps/third-party/garage/compose.yaml
+  - path: ../../apps/third-party/garage-ui/compose.yaml

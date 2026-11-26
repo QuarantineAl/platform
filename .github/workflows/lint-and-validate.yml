@@ -13,7 +13,7 @@
 #   2. compose-validate — `docker compose config` against
 #      environments/_template/compose.yaml with every profile flag
 #      (observability, uptime-kuma, portainer, lazzaretto, qualitech,
-#      residences, searxng, n8n, garage, vaultwarden), to
+#      residences, searxng, n8n, garage, garage-ui, vaultwarden), to
 #      structurally validate the assembled compose graph (include: resolution, var
 #      interpolation, profile gating) parses and merges cleanly. This needs
 #      *some* value for every ${VAR} the included fragments reference —
@@ -127,9 +127,12 @@ jobs:
           GARAGE_RPC_SECRET=0000000000000000000000000000000000000000000000000000000000000000
           GARAGE_ADMIN_TOKEN=dummy-garage-admin-token
           GARAGE_METRICS_TOKEN=dummy-garage-metrics-token
+          GARAGE_UI_VERSION=v0.14.0
+          OIDC_CLIENT_ID_GARAGE_UI=dummy-oidc-client-id
+          OIDC_CLIENT_SECRET_GARAGE_UI=dummy-oidc-client-secret
           EOF
 
-      - name: docker compose config (observability + uptime-kuma + portainer + lazzaretto + qualitech + residences + searxng + n8n + garage + vaultwarden profiles)
+      - name: docker compose config (observability + uptime-kuma + portainer + lazzaretto + qualitech + residences + searxng + n8n + garage + garage-ui + vaultwarden profiles)
         shell: bash
         working-directory: environments/_template
         run: |
@@ -145,6 +148,7 @@ jobs:
             --profile searxng \
             --profile n8n \
             --profile garage \
+            --profile garage-ui \
             --profile vaultwarden \
             -f compose.yaml \
             config

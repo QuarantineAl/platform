@@ -282,9 +282,8 @@ apps:
       - key: rpc_secret
         env: GARAGE_RPC_SECRET
         generator: hex32
-      # Bearer tokens for the admin API and /metrics. Both are bound to
-      # localhost inside the container (garage.toml), so nothing uses them
-      # today, but Garage needs them set to enable those endpoints.
+      # Bearer tokens for the admin API and /metrics. garage-ui uses the
+      # admin token over the private garage-admin network.
       - key: admin_token
         env: GARAGE_ADMIN_TOKEN
         generator: alnum32
@@ -299,7 +298,28 @@ apps:
       only, region "garage". One copy of each object, so back up the
       garage-meta and garage-data volumes off-host. Removing an app keeps
       its bucket and data, the same way removing a needs_db app keeps its
-      database. No web UI: use `docker exec quarantine-garage /garage ...`.
+      database. Object data lives on its own disk mounted at
+      /srv/quarantine/garage-data on the host; create that before the first
+      start (docs/site/guides/apps/garage.md). Web UI: the garage-ui app.
+
+  - name: garage-ui
+    kind: app
+    compose_path: apps/third-party/garage-ui/compose.yaml
+    subdomain: storage
+    needs_db: false
+    needs_oidc: true
+    # One role: anyone Zitadel lets in is a full Garage admin in the UI.
+    zitadel_roles:
+      - "garage-ui:admin"
+    oidc_redirect_uris:
+      - "https://storage.${DOMAIN}/auth/oidc/callback"
+    notes: >-
+      Web UI for Garage (Noooste/garage-ui): browse and upload objects,
+      manage buckets and keys, see disk use. Needs garage in the same
+      manifest. Logs in through its own OIDC client (no oauth2-proxy);
+      grant access with `quarantine user grant <email> garage-ui
+      garage-ui:admin`. App buckets still come from needs_bucket: keys made
+      in the UI are not saved in secrets.sops.yaml.
 
   - name: qualitech
     kind: app

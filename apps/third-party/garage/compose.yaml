@@ -9,7 +9,11 @@
 # - Single node, one copy of each object. Back the volumes up off-host.
 # - Path-style URLs only (https://s3.${DOMAIN}/<bucket>/<key>). Set
 #   forcePathStyle: true (or the SDK's equivalent) and region "garage".
-# - No web UI. Use the CLI: docker exec quarantine-garage /garage <command>
+# - Web UI: the separate garage-ui catalog app. Or the CLI:
+#   docker exec quarantine-garage /garage <command>
+# - Object data lives on its own disk, mounted on the host at
+#   /srv/quarantine/garage-data (see the volume at the bottom). It is still a
+#   named volume, so `quarantine backup` picks it up.
 # - The image has no shell, so the healthcheck runs the garage binary itself.
 #
 # PIN CHECKPOINT: dxflrs/garage:v2.5.0 (latest stable, 2026-10-24). v2.3.0+
@@ -34,6 +38,8 @@ services:
     mem_limit: 512m
     networks:
       - edge
+      # Private link to garage-ui for the admin API.
+      - garage-admin
     volumes:
       - ./garage.toml:/etc/garage.toml:ro
       - garage-meta:/var/lib/garage/meta
@@ -57,7 +63,18 @@ services:
 networks:
   edge:
     external: true
+  garage-admin:
+    name: quarantine-garage-admin
+    internal: true
 
 volumes:
   garage-meta:
+  # A named volume whose files sit on the host's dedicated Garage disk, so
+  # a full bucket can never fill the VM's root disk. The directory must
+  # exist before Garage starts: see docs/site/guides/apps/garage.md.
   garage-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /srv/quarantine/garage-data
