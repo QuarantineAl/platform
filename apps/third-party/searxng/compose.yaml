@@ -32,6 +32,11 @@ services:
     image: searxng/searxng:${SEARXNG_VERSION:-2026.8.10-0a118066d}
     container_name: quarantine-searxng
     restart: unless-stopped
+    # Memory cap, well above normal use, so a runaway cannot starve the other containers.
+    mem_limit: 768m
+    # The process can never gain more rights than it started with.
+    security_opt:
+      - no-new-privileges:true
     profiles: [searxng]
     networks:
       - edge

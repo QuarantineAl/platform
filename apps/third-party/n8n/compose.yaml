@@ -86,6 +86,12 @@ services:
     image: docker.n8n.io/n8nio/n8n:${N8N_VERSION:-2.34.1}
     container_name: quarantine-n8n
     restart: unless-stopped
+    # Memory cap, well above normal use, so a runaway cannot starve the other containers.
+    # Keep NODE_OPTIONS below in step: Node sizes its heap from this cap.
+    mem_limit: 2g
+    # The process can never gain more rights than it started with.
+    security_opt:
+      - no-new-privileges:true
     profiles: [n8n]
     networks:
       - edge
@@ -95,6 +101,9 @@ services:
       # executions (needs_db: true above).
       - n8n-data:/home/node/.n8n
     environment:
+      # Under a memory cap Node only lets itself use about half of it, which
+      # would make big workflows fail early. This gives it 1.5 GB of the 2 GB.
+      NODE_OPTIONS: --max-old-space-size=1536
       DB_TYPE: postgresdb
       DB_POSTGRESDB_HOST: postgres
       DB_POSTGRESDB_PORT: 5432

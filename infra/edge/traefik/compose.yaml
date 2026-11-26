@@ -19,6 +19,11 @@ services:
     image: traefik:v3.7.9
     container_name: quarantine-traefik
     restart: unless-stopped
+    # Memory cap, well above normal use, so a runaway cannot starve the other containers.
+    mem_limit: 256m
+    # The process can never gain more rights than it started with.
+    security_opt:
+      - no-new-privileges:true
     command:
       - --log.level=${TRAEFIK_LOG_LEVEL:-INFO}
       - --accesslog=true

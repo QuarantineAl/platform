@@ -28,6 +28,9 @@ services:
     image: louislam/uptime-kuma:${UPTIME_KUMA_VERSION:-2.4.0}
     container_name: quarantine-uptime-kuma
     restart: unless-stopped
+    # The process can never gain more rights than it started with.
+    security_opt:
+      - no-new-privileges:true
     profiles: [uptime-kuma]
     networks:
       - edge

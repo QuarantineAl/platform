@@ -99,6 +99,9 @@ services:
     image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.3
     container_name: quarantine-oauth2-proxy-uptime-kuma
     restart: unless-stopped
+    # The process can never gain more rights than it started with.
+    security_opt:
+      - no-new-privileges:true
     profiles: [uptime-kuma]
     environment:
       OAUTH2_PROXY_PROVIDER: oidc
@@ -177,6 +180,9 @@ services:
     # container_name and the labels below vary per instance.
     container_name: quarantine-oauth2-proxy-${SUBDOMAIN:-lazzaretto}
     restart: unless-stopped
+    # The process can never gain more rights than it started with.
+    security_opt:
+      - no-new-privileges:true
     profiles: [lazzaretto]
     environment:
       OAUTH2_PROXY_PROVIDER: oidc
@@ -461,6 +467,9 @@ services:
     image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.3
     container_name: quarantine-oauth2-proxy-n8n
     restart: unless-stopped
+    # The process can never gain more rights than it started with.
+    security_opt:
+      - no-new-privileges:true
     profiles: [n8n]
     environment:
       OAUTH2_PROXY_PROVIDER: oidc
@@ -517,6 +526,9 @@ services:
     image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.3
     container_name: quarantine-oauth2-proxy-delivery-note-ai
     restart: unless-stopped
+    # The process can never gain more rights than it started with.
+    security_opt:
+      - no-new-privileges:true
     profiles: [delivery-note-ai]
     environment:
       OAUTH2_PROXY_PROVIDER: oidc
@@ -572,6 +584,9 @@ services:
     image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.3
     container_name: quarantine-oauth2-proxy-bem
     restart: unless-stopped
+    # The process can never gain more rights than it started with.
+    security_opt:
+      - no-new-privileges:true
     profiles: [bem]
     environment:
       OAUTH2_PROXY_PROVIDER: oidc
@@ -624,6 +639,9 @@ services:
     image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.3
     container_name: quarantine-oauth2-proxy-docs
     restart: unless-stopped
+    # The process can never gain more rights than it started with.
+    security_opt:
+      - no-new-privileges:true
     profiles: [docs]
     environment:
       OAUTH2_PROXY_PROVIDER: oidc
