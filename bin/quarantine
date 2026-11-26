@@ -1359,6 +1359,24 @@ cmd_staff() {
 # status
 # ---------------------------------------------------------------------------
 
+# Everything about backups lives in provisioners/backup.sh; this only decrypts
+# the secrets and hands over.
+cmd_backup() {
+  load_config
+  local subcmd="${1:-}"
+  [[ $# -gt 0 ]] && shift
+  case "$subcmd" in
+    init|run|list|status|restore|restore-volume) ;;
+    *) usage >&2; die "unknown 'backup' subcommand: ${subcmd}" ;;
+  esac
+  local plaintext
+  plaintext="$(secrets_decrypt_to_tmpfs "$QUARANTINE_REPO" "$QUARANTINE_ENV")"
+  trap_add "shred_file '${plaintext}'"
+  QUARANTINE_CONFIG_FILE="$QUARANTINE_CONFIG_FILE" \
+    "${QUARANTINE_REPO}/provisioners/backup.sh" "$subcmd" \
+    "$QUARANTINE_REPO" "$QUARANTINE_ENV" "$plaintext" "$@"
+}
+
 cmd_status() {
   load_config
   log "environment: ${QUARANTINE_ENV}  domain: ${DOMAIN}"
@@ -1563,6 +1581,21 @@ Commands:
                           Members share one container — adding one is a
                           trust decision, not just a config change.
 
+  backup init <repository>
+                          One-time setup: where backups go (an sftp:
+                          address or a local path), the encryption
+                          password, and the nightly timer.
+  backup run              Back up now: volumes, Postgres, SQLite databases.
+  backup list             Backups stored in the repository.
+  backup status           When the last good backup ran. Fails if it is
+                          older than 26 hours.
+  backup restore <snapshot|latest> <dir>
+                          Copy a whole backup into an empty directory.
+                          Touches nothing that is running.
+  backup restore-volume <snapshot|latest> <volume>
+                          Replace one Docker volume with its content from
+                          a backup. Stop its containers first.
+
   status                  Show container status for this environment.
   version                 Print the version of the repo checkout on disk.
   upgrade                 Fetch + fast-forward-only merge origin/main, then start.
@@ -1598,6 +1631,7 @@ main() {
     tenant) cmd_tenant "$@" ;;
     staff) cmd_staff "$@" ;;
     signup) cmd_signup "$@" ;;
+    backup) cmd_backup "$@" ;;
     status) cmd_status "$@" ;;
     version) cmd_version "$@" ;;
     upgrade) cmd_upgrade "$@" ;;

@@ -96,5 +96,5 @@ its password is `core.zitadel.admin_password` in the secrets
 |---|---|
 | `/opt/quarantine/keys/age-<env>.txt` | Offline, immediately. The only irreplaceable piece. |
 | `secrets.sops.yaml`, `manifest.yaml`, `compose.yaml` | Already in git |
-| Docker volumes (Postgres, Zitadel state via Postgres, app data) | Not handled by the platform; back up like any Docker volume |
-| `/opt/quarantine/tenants/` | Allowlists and tenant settings (prod) |
+| Docker volumes, Postgres, app data | `quarantine backup`, once set up. See [Backups and restore](/platform/guides/backups/) |
+| `/opt/quarantine/tenants/` | Included in `quarantine backup` |
