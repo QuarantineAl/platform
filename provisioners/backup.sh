@@ -117,6 +117,9 @@ volumes_to_back_up() {
     [[ -n "$pattern" ]] && excludes+=("$pattern")
   done < <(yq eval '.backup.exclude_volumes[]?' "$config_file" 2>/dev/null || true)
 
+  local all
+  all="$(docker volume ls --format '{{.Name}}' | sort)" || die "could not list Docker volumes"
+
   while IFS= read -r name; do
     [[ -z "$name" ]] && continue
     # 64 hex characters is a volume nobody named: throwaway data.
@@ -127,7 +130,16 @@ volumes_to_back_up() {
       [[ "$name" == $pattern ]] && { skip=1; break; }
     done
     (( skip )) || printf '%s\n' "$name"
-  done < <(docker volume ls --format '{{.Name}}' | sort)
+  done <<< "$all"
+}
+
+# latest_filter <snapshot> — prints the restic flags that make "latest" mean
+# the newest COMPLETE backup of this environment. A run that could not dump
+# Postgres is still saved, tagged "incomplete", and must not be picked here.
+latest_filter() {
+  if [[ "$1" == "latest" ]]; then
+    printf -- '--tag\n%s,complete\n' "$env"
+  fi
 }
 
 # The Python that copies SQLite databases. It finds them by file header, not
@@ -160,6 +172,14 @@ def copy(src_path, dst_path):
     st = os.stat(src_path)
     os.chown(dst_path, st.st_uid, st.st_gid)
     os.chmod(dst_path, st.st_mode & 0o7777)
+
+# Who owns the top directory of each volume. A restore into a new volume
+# needs it: Docker creates that directory as root, and an app that runs as
+# another user could then not write to it.
+with open("/staging/volume-owners", "w") as fh:
+    for vol in sorted(os.listdir("/volumes")):
+        st = os.stat(os.path.join("/volumes", vol))
+        fh.write("%s %d %d %o\n" % (vol, st.st_uid, st.st_gid, st.st_mode & 0o7777))
 
 for root, _dirs, files in os.walk("/volumes"):
     for name in files:
@@ -194,6 +214,7 @@ sys.exit(1 if failed else 0)
 do_init() {
   [[ $# -eq 1 ]] || die "usage: quarantine backup init <repository>   (e.g. sftp:backup@10.0.0.1:/srv/backups/${env}, or a local path)"
   local new_repo="$1"
+  acquire_lock "$repo_root" "$env"
 
   mkdir -p "$backup_dir"
   chmod 700 "$backup_dir"
@@ -287,9 +308,11 @@ do_run() {
   # The staging copy holds plain data: never leave it behind.
   trap_add "rm -rf '${staging_dir}'"
 
+  local vol_list
+  vol_list="$(volumes_to_back_up)" || die "could not work out which volumes to back up"
   while IFS= read -r vol; do
     [[ -n "$vol" ]] && volumes+=("$vol")
-  done < <(volumes_to_back_up)
+  done <<< "$vol_list"
   log "backing up ${#volumes[@]} volume(s)"
 
   # 1. Postgres
@@ -298,6 +321,7 @@ do_run() {
     if ! docker exec "$postgres_container" pg_dumpall -U "${POSTGRES_ADMIN_USER:-postgres}" --clean --if-exists \
         > "${staging_dir}/postgres/dumpall.sql"; then
       warn "Postgres dump failed"
+      rm -f "${staging_dir}/postgres/dumpall.sql"
       failed=1
     fi
   else
@@ -338,18 +362,24 @@ do_run() {
   paths+=(/host/quarantine.yaml)
 
   log "uploading to ${repository}"
-  local rc=0
-  restic "${mounts[@]}" backup --tag "$env" "${paths[@]}" >&2 || rc=$?
+  local rc=0 state=complete
+  (( failed )) && state=incomplete
+  restic "${mounts[@]}" backup --tag "$env" --tag "$state" "${paths[@]}" >&2 || rc=$?
   # restic exits 3 when the backup was saved but some files could not be read.
   if (( rc == 3 )); then
     warn "some files could not be read — the backup is saved without them"
     failed=1
+    restic tag --tag "${env},complete" --remove complete --add incomplete latest >&2 \
+      || warn "could not mark that backup as incomplete"
   elif (( rc != 0 )); then
     die "upload failed — nothing new was saved"
   fi
 
   log "removing old backups"
-  restic forget --tag "$env" "${KEEP_ARGS[@]}" --prune >&2 \
+  # Only complete backups count towards what is kept. Otherwise a broken
+  # run could push out the good backup from the same day.
+  restic forget --tag "${env},complete" --group-by host "${KEEP_ARGS[@]}" >&2 \
+    && restic forget --tag "${env},incomplete" --group-by host --keep-last 2 --prune >&2 \
     || warn "could not remove old backups (the new one is saved)"
 
   if (( failed )); then
@@ -398,7 +428,9 @@ do_restore() {
   mkdir -p "$target"
   [[ -z "$(ls -A "$target")" ]] || die "target directory is not empty: ${target}"
   target="$(cd "$target" && pwd)"
-  restic --mount "${target}:/target" restore "$snapshot" --target /target >&2
+  local -a pick=()
+  mapfile -t pick < <(latest_filter "$snapshot")
+  restic --mount "${target}:/target" restore "${pick[@]}" "$snapshot" --target /target >&2
   log "restored into ${target} (volumes/, staging/postgres/dumpall.sql, staging/sqlite/, host/)"
 }
 
@@ -407,9 +439,13 @@ do_restore_volume() {
   [[ $# -eq 2 ]] || die "usage: quarantine backup restore-volume <snapshot|latest> <volume>"
   require_ready
   local snapshot="$1" vol="$2" users
+  local -a pick=()
+  mapfile -t pick < <(latest_filter "$snapshot")
 
-  restic ls "$snapshot" "/volumes/${vol}" >/dev/null 2>&1 \
-    || die "volume '${vol}' is not in snapshot '${snapshot}'"
+  # "snapshot:/path" fails when the path is missing. A plain "ls snapshot
+  # /path" does not: it just lists nothing.
+  restic ls "${pick[@]}" "${snapshot}:/volumes/${vol}" >/dev/null 2>&1 \
+    || die "volume '${vol}' is not in snapshot '${snapshot}' (see 'quarantine backup list')"
 
   users="$(docker ps --filter "volume=${vol}" --format '{{.Names}}' | tr '\n' ' ')"
   [[ -z "${users// }" ]] || die "stop the container(s) using this volume first: ${users}"
@@ -425,14 +461,19 @@ do_restore_volume() {
   # raw ones and removes leftover journal files, which belong to the raw
   # copies and would corrupt the clean ones.
   local has_sqlite=0
-  restic ls "$snapshot" "/staging/sqlite/${vol}" >/dev/null 2>&1 && has_sqlite=1
+  restic ls "${pick[@]}" "${snapshot}:/staging/sqlite/${vol}" >/dev/null 2>&1 && has_sqlite=1
 
   local script
   script="set -eu
-restic restore \"${snapshot}:/volumes/${vol}\" --target /target --delete
+restic restore ${pick[*]} \"${snapshot}:/volumes/${vol}\" --target /target --delete
+owner=\$(restic dump ${pick[*]} \"${snapshot}\" /staging/volume-owners 2>/dev/null | awk -v v=\"${vol}\" '\$1 == v { print \$2 \":\" \$3 \" \" \$4 }')
+if [ -n \"\$owner\" ]; then
+  chown \"\${owner% *}\" /target
+  chmod \"\${owner#* }\" /target
+fi
 if [ \"${has_sqlite}\" = 1 ]; then
   mkdir /overlay
-  restic restore \"${snapshot}:/staging/sqlite/${vol}\" --target /overlay
+  restic restore ${pick[*]} \"${snapshot}:/staging/sqlite/${vol}\" --target /overlay
   cd /overlay
   find . -type f | while IFS= read -r f; do
     cp -p \"\$f\" \"/target/\$f\"

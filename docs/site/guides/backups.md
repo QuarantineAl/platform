@@ -75,15 +75,18 @@ one). It is fetched after every good backup, so the monitor alerts when the
 pings stop.
 
 A run that saves the data but could not dump Postgres or copy a SQLite
-database ends with an error and does not count as good.
+database ends with an error and does not count as good. It is still stored,
+marked `incomplete` in `backup list`, and `latest` never picks it.
 
 ## How long backups are kept
 
-7 daily, 4 weekly and 6 monthly. Older ones are removed after each run.
+7 daily, 4 weekly and 6 monthly complete backups, plus the last two
+incomplete ones. Older ones are removed after each run.
 
 ## Restore
 
-Pick a backup with `quarantine backup list`. Use its ID, or `latest`.
+Pick a backup with `quarantine backup list`. Use its ID, or `latest` for
+the newest complete one.
 
 ### One app's volume
 
@@ -121,12 +124,21 @@ plain data: delete it when done.
 
 ### A whole VM
 
+:::caution
+This has not been rehearsed end to end. Treat it as an outline and expect
+to adapt it.
+:::
+
 1. Install the platform and run `quarantine init --age-key-file <your copy>`
    ([New environment](/platform/guides/environments/new-environment/)).
 2. `quarantine backup init <the same repository>`. The password comes from
-   `secrets.sops.yaml` in git, so the existing repository opens.
-3. `quarantine start` to create the containers and volumes, then stop the apps.
-4. Restore Postgres and each volume as above, then `quarantine start` again.
+   `secrets.sops.yaml` in git, so the existing repository opens. Over SFTP
+   the new VM gets a new SSH key: add it on the backup server first.
+3. Start only Postgres, restore the dump into it (see above), then run
+   `quarantine start`. Restoring Postgres first matters: `secrets.sops.yaml`
+   holds a Zitadel token that only the old Zitadel database knows, so a
+   start against an empty database is likely to fail.
+4. Stop the apps, restore each volume as above, and `quarantine start` again.
 
 ## Test a restore
 
