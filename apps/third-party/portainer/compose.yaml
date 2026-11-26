@@ -42,6 +42,9 @@ services:
     image: portainer/portainer-ce:2.44.0
     container_name: quarantine-portainer
     restart: unless-stopped
+    # The process can never gain more rights than it started with.
+    security_opt:
+      - no-new-privileges:true
     profiles: [portainer]
     command: ["-H", "unix:///var/run/docker.sock"]
     networks:

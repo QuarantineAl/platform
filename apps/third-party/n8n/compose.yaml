@@ -86,6 +86,11 @@ services:
     image: docker.n8n.io/n8nio/n8n:${N8N_VERSION:-2.34.1}
     container_name: quarantine-n8n
     restart: unless-stopped
+    # Memory cap, well above normal use, so a runaway cannot starve the other containers.
+    mem_limit: 1536m
+    # The process can never gain more rights than it started with.
+    security_opt:
+      - no-new-privileges:true
     profiles: [n8n]
     networks:
       - edge

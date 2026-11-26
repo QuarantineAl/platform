@@ -72,6 +72,23 @@ apt-get update -qq
 log "installing base packages: git curl age ca-certificates"
 apt-get install -y -qq git curl age ca-certificates >/dev/null
 
+# Cap container logs at 5 files of 20 MB each. Without this Docker keeps every
+# log line forever and the disk fills up. Written before Docker is installed so
+# its first start already uses it; an existing config is left alone.
+if [[ ! -f /etc/docker/daemon.json ]]; then
+  log "writing /etc/docker/daemon.json (container log rotation)"
+  mkdir -p /etc/docker
+  cat > /etc/docker/daemon.json <<'JSON'
+{
+  "log-driver": "json-file",
+  "log-opts": { "max-size": "20m", "max-file": "5" }
+}
+JSON
+  if command -v docker >/dev/null 2>&1; then
+    log "Docker is already installed: run 'systemctl restart docker' when a short outage is fine, then 'quarantine start'. Only containers created after that get the cap."
+  fi
+fi
+
 if ! command -v docker >/dev/null 2>&1; then
   log "installing Docker (official convenience script: get.docker.com)"
   curl -fsSL https://get.docker.com | sh

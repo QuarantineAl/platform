@@ -36,6 +36,11 @@ services:
     image: ghcr.io/zitadel/zitadel:v4.16.1
     container_name: quarantine-zitadel-api
     restart: unless-stopped
+    # Memory cap, well above normal use, so a runaway cannot starve the other containers.
+    mem_limit: 768m
+    # The process can never gain more rights than it started with.
+    security_opt:
+      - no-new-privileges:true
     user: "0" # matches upstream: bootstrap PAT files are shared with zitadel-login via a root-writable volume
     command: start-from-init --masterkey "${ZITADEL_MASTERKEY}"
     environment:
@@ -138,6 +143,11 @@ services:
     image: ghcr.io/zitadel/zitadel-login:v4.16.1
     container_name: quarantine-zitadel-login
     restart: unless-stopped
+    # Memory cap, well above normal use, so a runaway cannot starve the other containers.
+    mem_limit: 512m
+    # The process can never gain more rights than it started with.
+    security_opt:
+      - no-new-privileges:true
     user: "0"
     environment:
       ZITADEL_API_URL: http://zitadel-api:8080

@@ -57,15 +57,19 @@
 #   RUNNER_SCOPE=repo REPO_URL=https://github.com/QuarantineAl/lazzaretto \
 #     RUNNER_TOKEN=<token> docker compose -f infra/ci/github-runner/compose.yaml up -d
 #
-# PIN CHECKPOINT: myoung34/github-runner:latest — env vars (ACCESS_TOKEN vs
+# PIN CHECKPOINT: myoung34/github-runner:2.338.2 (the version prod was
+# already running under :latest on 2026-11-26). The tag is the GitHub runner
+# version; Renovate bumps it. Don't let it fall far behind: GitHub stops
+# accepting jobs from runners that are too old. Env vars (ACCESS_TOKEN vs
 # RUNNER_TOKEN, RUNNER_SCOPE/ORG_NAME/REPO_URL branching, EPHEMERAL,
-# RUNNER_WORKDIR default) confirmed against that image's own /entrypoint.sh
-# on 2026-08-03. No version pin yet — this image has no tagged releases at
-# the time of writing; revisit once it does.
+# RUNNER_WORKDIR default) were confirmed against the image's /entrypoint.sh
+# on 2026-08-03.
+#
+# No no-new-privileges here, unlike the other containers: jobs use sudo.
 
 services:
   runner:
-    image: myoung34/github-runner:latest
+    image: myoung34/github-runner:2.338.2
     restart: always
     environment:
       RUNNER_SCOPE: ${RUNNER_SCOPE:-org}
@@ -131,7 +135,7 @@ services:
   # same host — same reasoning as every other per-instance path in this
   # repo (see e.g. oauth2-proxy/compose.yaml's own container_name comment).
   runner-platform-deploy:
-    image: myoung34/github-runner:latest
+    image: myoung34/github-runner:2.338.2
     restart: always
     environment:
       RUNNER_SCOPE: ${RUNNER_SCOPE:-org}

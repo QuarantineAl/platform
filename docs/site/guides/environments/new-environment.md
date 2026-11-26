@@ -35,6 +35,21 @@ fast-forwards an existing clone) and links `/usr/local/bin/quarantine`.
 | `QUARANTINE_INSTALL_DIR` | `/opt/quarantine/repo` |
 | `QUARANTINE_BIN_LINK` | `/usr/local/bin/quarantine` |
 
+It also writes `/etc/docker/daemon.json` so each container keeps at most 5
+log files of 20 MB. Without that, Docker keeps every log line and the disk
+fills up. An existing `daemon.json` is left alone.
+
+On a host that was installed before this existed, add the file by hand and
+restart Docker when a short outage is fine. Only containers created after
+the restart get the cap, so run `quarantine start` afterwards:
+
+```json title="/etc/docker/daemon.json"
+{
+  "log-driver": "json-file",
+  "log-opts": { "max-size": "20m", "max-file": "5" }
+}
+```
+
 Stay root for every `quarantine` command afterwards.
 
 ## 2. Init

@@ -20,6 +20,7 @@
 #   quarantine start
 apps:
   - name: portainer
+  - name: uptime-kuma
   - name: lazzaretto
     version: prod
   - name: searxng

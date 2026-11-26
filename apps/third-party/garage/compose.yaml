@@ -20,6 +20,9 @@ services:
     image: dxflrs/garage:${GARAGE_VERSION:-v2.5.0}
     container_name: quarantine-garage
     restart: unless-stopped
+    # The process can never gain more rights than it started with.
+    security_opt:
+      - no-new-privileges:true
     profiles: [garage]
     # Creates the single-node cluster layout on first boot.
     command: ["/garage", "server", "--single-node"]
