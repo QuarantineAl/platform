@@ -23,6 +23,7 @@ s3_region = "garage"
 api_bind_addr = "[::]:3900"
 
 [admin]
-# Admin API and metrics stay inside the container. Operators use the
-# `garage` CLI through `docker exec` instead.
-api_bind_addr = "127.0.0.1:3903"
+# Admin API and /metrics. Reached by garage-ui over the garage-admin
+# network. Every call needs GARAGE_ADMIN_TOKEN (or the metrics token), and
+# Traefik never routes to this port.
+api_bind_addr = "[::]:3903"
