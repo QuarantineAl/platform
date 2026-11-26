@@ -52,6 +52,20 @@ sudo mkfs.ext4 -L garage-data /dev/sdX
 sudo mkdir -p /srv/quarantine/garage-data && echo "UUID=$(sudo blkid -s UUID -o value /dev/sdX) /srv/quarantine/garage-data ext4 defaults,nofail 0 2" | sudo tee -a /etc/fstab && sudo mount -a
 ```
 
+### Moving a Garage that already ran
+
+Garage keeps a `garage-marker` file in its data folder and won't start if
+its metadata remembers a data folder that this one isn't ("Could not find
+expected marker file"). That protects you from starting on an empty disk
+by mistake. So when an existing Garage moves to this disk:
+
+- **It holds nothing yet:** remove both its volumes
+  (`quarantine-<env>_garage-data` and `quarantine-<env>_garage-meta`) and
+  run `quarantine start`. This is what dev did.
+- **It holds data:** stop Garage, copy the old volume's files (marker
+  included) onto the disk with `cp -a`, remove only the old data volume,
+  then `quarantine start`.
+
 ### Making it bigger later
 
 Grow the volume on the host, then the filesystem in the VM. Both work while
